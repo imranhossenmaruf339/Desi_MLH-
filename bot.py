@@ -8,10 +8,10 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-@app.on_message()
-async def hello(client, message):
-    if message.text == "/start":
-        await message.reply_text("✅ Bot is running successfully!")
+# Import handler modules so their decorators register on the Client
+import start
+import help
+import profile
 
 print("Bot Started...")
 app.run()
