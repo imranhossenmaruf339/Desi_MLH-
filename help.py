@@ -6,7 +6,5 @@ async def help_cmd(client, message):
         "📌 Commands:\n"
         "/start - Start bot\n"
         "/help - Help menu\n"
-        "/profile - Your profile\n"
-        "/daily - Claim reward\n"
-        "/referral - Referral link"
+        "/profile - Your profile"
     )
