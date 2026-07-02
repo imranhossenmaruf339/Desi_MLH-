@@ -1,3 +1,4 @@
+import asyncio
 import random
 from datetime import datetime, timedelta
 
@@ -5,7 +6,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.errors import UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import OWNER_ID, JOIN_CHANNEL_LINK, JOIN_CHANNEL_2_LINK, JOIN_CHANNEL_2_USERNAME, VIDEO_DAILY_LIMIT
+from config import JOIN_CHANNEL_LINK, JOIN_CHANNEL_2_LINK, JOIN_CHANNEL_2_USERNAME, VIDEO_DAILY_LIMIT
 from database import users, videos, user_video_history
 from helpers import get_current_window_start
 
@@ -17,6 +18,15 @@ JOIN_BUTTONS = InlineKeyboardMarkup([
         InlineKeyboardButton("JOIN", url=JOIN_CHANNEL_2_LINK),
     ]
 ])
+
+
+async def _delete_after(client, chat_id: int, message_id: int, delay: int = 1800):
+    """Delete a message after `delay` seconds (default 30 minutes)."""
+    await asyncio.sleep(delay)
+    try:
+        await client.delete_messages(chat_id, message_id)
+    except Exception:
+        pass
 
 
 async def check_second_channel(client, user_id: int) -> bool:
@@ -33,17 +43,24 @@ async def check_second_channel(client, user_id: int) -> bool:
         return False
 
 
-@Client.on_message(filters.command("video") & filters.private)
+# Works in private chats AND in any group where the bot is a member
+@Client.on_message(filters.command("video") & (filters.private | filters.group))
 async def video_cmd(client, message):
+    # Anonymous group admins have no from_user
+    if not message.from_user:
+        await message.reply_text("❌ Cannot identify user. Please disable anonymous mode.")
+        return
+
     user_id = message.from_user.id
 
-    # Ensure user record exists
+    # ── Ensure user record exists ─────────────────────────────────────────────
     user = await users.find_one({"user_id": user_id})
     if not user:
         window = get_current_window_start()
         await users.insert_one({
             "user_id": user_id,
             "username": message.from_user.username,
+            "first_name": message.from_user.first_name or "",
             "points": 0,
             "referrals": 0,
             "video_count": 0,
@@ -114,45 +131,50 @@ async def video_cmd(client, message):
 
     video_doc = random.choice(pool)
     file_id = video_doc.get("file_id")
-    file_type = video_doc.get("file_type", "video")
 
-    # ── Send the video ────────────────────────────────────────────────────────
+    # ── Send the video with spoiler ───────────────────────────────────────────
+    # Always try send_video first so has_spoiler=True is applied.
+    # Documents cannot carry a spoiler; if the file_id only works as a document,
+    # we fall back to send_document (no spoiler — Telegram limitation).
+    sent = None
     try:
-        if file_type == "video":
-            await client.send_video(
-                chat_id=message.chat.id,
-                video=file_id,
-                caption=video_doc.get("caption", ""),
-                has_spoiler=True,
-                duration=video_doc.get("duration", 0),
-                width=video_doc.get("width", 0),
-                height=video_doc.get("height", 0),
-                reply_markup=JOIN_BUTTONS,
-            )
-        else:
-            # Document-type video (sent without re-encoding)
-            await client.send_document(
+        sent = await client.send_video(
+            chat_id=message.chat.id,
+            video=file_id,
+            caption=video_doc.get("caption", ""),
+            has_spoiler=True,
+            duration=video_doc.get("duration", 0),
+            width=video_doc.get("width", 0),
+            height=video_doc.get("height", 0),
+            reply_markup=JOIN_BUTTONS,
+        )
+    except Exception:
+        # file_id is a non-streamable document — send without spoiler
+        try:
+            sent = await client.send_document(
                 chat_id=message.chat.id,
                 document=file_id,
                 caption=video_doc.get("caption", ""),
                 reply_markup=JOIN_BUTTONS,
             )
+        except Exception as e:
+            await message.reply_text(
+                f"❌ Failed to send video. Please try again.\n<code>{e}</code>",
+                parse_mode=enums.ParseMode.HTML,
+            )
+            return
 
-        # Record history so this video is skipped for 7 days
-        await user_video_history.insert_one({
-            "user_id": user_id,
-            "video_id": video_doc["_id"],
-            "sent_at": datetime.utcnow(),
-        })
+    # ── Schedule auto-delete after 30 minutes ────────────────────────────────
+    if sent:
+        asyncio.create_task(_delete_after(client, message.chat.id, sent.id, delay=1800))
 
-        # Increment the 12-hour counter
-        await users.update_one(
-            {"user_id": user_id},
-            {"$set": {"video_count": video_count + 1}},
-        )
-
-    except Exception as e:
-        await message.reply_text(
-            f"❌ Failed to send video. Please try again.\n<code>{e}</code>",
-            parse_mode=enums.ParseMode.HTML,
-        )
+    # ── Record history + increment counter ───────────────────────────────────
+    await user_video_history.insert_one({
+        "user_id": user_id,
+        "video_id": video_doc["_id"],
+        "sent_at": datetime.utcnow(),
+    })
+    await users.update_one(
+        {"user_id": user_id},
+        {"$set": {"video_count": video_count + 1}},
+    )

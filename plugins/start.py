@@ -1,7 +1,6 @@
 from pyrogram import Client, filters, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import OWNER_ID
+from config import LOG_GROUP_ID
 from database import users
 from helpers import get_current_window_start
 
@@ -29,10 +28,10 @@ async def start(client, message):
     else:
         status_label = "🔁 Returning user"
 
-    # Notify the admin every time someone starts the bot
+    # Send notification to the log group (or owner DM if LOG_GROUP_ID not set)
     try:
         await client.send_message(
-            chat_id=OWNER_ID,
+            chat_id=LOG_GROUP_ID,
             text=(
                 f"👤 <b>User Started Bot</b>\n\n"
                 f"📛 Name: {user.first_name or ''} {user.last_name or ''}\n"
