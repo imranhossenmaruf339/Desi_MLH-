@@ -8,7 +8,13 @@ from helpers import get_current_window_start
 
 
 def _make_welcome_keyboard(bot_username: str):
+    from urllib.parse import quote
     from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    bot_url = f"https://t.me/{bot_username}"
+    share_text = quote(f"Watch exclusive videos! Try @{bot_username}", safe="")
+    share_url = f"https://t.me/share/url?url={quote(bot_url, safe='')}&text={share_text}"
+
     return InlineKeyboardMarkup([
         # Row 1 — add bot to a group
         [InlineKeyboardButton(
@@ -23,10 +29,7 @@ def _make_welcome_keyboard(bot_username: str):
         # Row 3 — my status + share bot
         [
             InlineKeyboardButton("📊 My Status", callback_data="my_status"),
-            InlineKeyboardButton(
-                "📢 Share Bot",
-                url=f"https://t.me/share/url?url=https://t.me/{bot_username}&text=🎬 Watch exclusive videos! Try @{bot_username}",
-            ),
+            InlineKeyboardButton("📢 Share Bot", url=share_url),
         ],
     ])
 
