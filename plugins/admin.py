@@ -166,6 +166,65 @@ async def auto_index_new_video(client, message):
     })
 
 
+# ─── /fixvideos — re-process document-type videos for spoiler support ────────
+
+@Client.on_message(filters.command("fixvideos") & filters.user(OWNER_ID))
+async def fix_videos_cmd(client, message):
+    """Re-send every document-type video through send_video to get a spoiler-capable file_id."""
+    doc_vids = await videos.find({"file_type": "document"}).to_list(length=None)
+    total = len(doc_vids)
+
+    if total == 0:
+        await message.reply_text(
+            "✅ All videos already have spoiler-capable file IDs. Nothing to fix.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    status = await message.reply_text(
+        f"🔄 Re-processing <b>{total}</b> document-type video(s)…\n"
+        "This may take a moment.",
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+    fixed = failed = 0
+    for vid in doc_vids:
+        try:
+            tmp = await client.send_video(
+                chat_id=LOG_GROUP_ID,
+                video=vid["file_id"],
+                caption="",
+            )
+            new_file_id = tmp.video.file_id
+            duration = tmp.video.duration or 0
+            width = tmp.video.width or 0
+            height = tmp.video.height or 0
+            await tmp.delete()
+
+            await videos.update_one(
+                {"_id": vid["_id"]},
+                {"$set": {
+                    "file_id": new_file_id,
+                    "file_type": "video",
+                    "duration": duration,
+                    "width": width,
+                    "height": height,
+                }},
+            )
+            fixed += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.3)
+
+    await status.edit_text(
+        f"✅ <b>Fix complete!</b>\n\n"
+        f"🎭 Converted: <b>{fixed}</b>\n"
+        f"❌ Failed: <b>{failed}</b>\n\n"
+        f"{'All videos now support spoiler! 🎉' if failed == 0 else 'Some videos could not be converted — they may stay without spoiler.'}",
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+
 # ─── /delvideo <index> — remove a video by its position number ───────────────
 
 @Client.on_message(filters.command("delvideo") & filters.user(OWNER_ID))

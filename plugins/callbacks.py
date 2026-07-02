@@ -101,14 +101,27 @@ async def confirm_join(client, callback_query):
     # If VIP_CHANNEL_ID is not configured OR check could not run, send request
     # straight to the monitor group for admin manual verification.
 
-    # ── Guard: already has a pending request ──────────────────────────────────
-    existing = await video_requests.find_one({"user_id": requester_id, "status": "pending"})
+    # ── Guard: pending request less than 24 h old ─────────────────────────────
+    from datetime import timedelta
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    existing = await video_requests.find_one({
+        "user_id": requester_id,
+        "status": "pending",
+        "requested_at": {"$gte": cutoff},
+    })
     if existing:
         await callback_query.answer(
             "⏳ Your request is already pending admin review. Please wait.",
             show_alert=True,
         )
         return
+
+    # Clear any old/stale pending entries before inserting a fresh one
+    await video_requests.delete_many({
+        "user_id": requester_id,
+        "status": "pending",
+        "requested_at": {"$lt": cutoff},
+    })
 
     await video_requests.insert_one({
         "user_id": requester_id,
@@ -131,6 +144,7 @@ async def confirm_join(client, callback_query):
         else "N/A"
     )
 
+    # Send to monitor group — surface any error so it isn't silently lost
     try:
         await client.send_message(
             chat_id=LOG_GROUP_ID,
@@ -139,15 +153,21 @@ async def confirm_join(client, callback_query):
                 f"👤 Name: {callback_query.from_user.first_name}\n"
                 f"🔖 Username: {username_display}\n"
                 f"🔢 User ID: <code>{requester_id}</code>\n\n"
-                "✅ Confirmed joined <b>VIP Channel</b>.\n"
+                "✅ Claims to have joined <b>VIP Channel</b>.\n"
                 f"🔗 {VIP_CHANNEL_LINK}\n\n"
                 "Approve to grant <b>+15 extra videos</b>."
             ),
             parse_mode=enums.ParseMode.HTML,
             reply_markup=keyboard,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        # Roll back the pending insert so user can try again
+        await video_requests.delete_one({"user_id": requester_id, "status": "pending"})
+        await callback_query.answer(
+            f"❌ Could not reach monitor group. Please try again later.\nError: {e}",
+            show_alert=True,
+        )
+        return
 
     await callback_query.answer("✅ Request sent! Please wait for admin approval.", show_alert=True)
     try:
