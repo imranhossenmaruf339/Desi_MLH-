@@ -2,201 +2,134 @@ import asyncio
 from datetime import datetime
 
 from pyrogram import Client, filters, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import OWNER_ID, VIDEO_CHANNEL_ID
 from database import users, videos
 
 
-# ─── Auto-capture new videos posted to the channel ───────────────────────────
-
-@Client.on_message(filters.chat(VIDEO_CHANNEL_ID))
-async def auto_index_new_video(client, message):
-    """Automatically save video message IDs when new posts arrive in the channel."""
-    is_video = bool(message.video)
-    is_doc_video = (
-        message.document
-        and message.document.mime_type
-        and message.document.mime_type.startswith("video/")
-    )
-    if not (is_video or is_doc_video):
-        return
-
-    await videos.update_one(
-        {"msg_id": message.id},
-        {
-            "$setOnInsert": {
-                "msg_id": message.id,
-                "channel_id": VIDEO_CHANNEL_ID,
-                "is_document": bool(message.document),
-                "indexed_at": datetime.utcnow(),
-            }
-        },
-        upsert=True,
-    )
-
-
-# ─── Auto-detect when admin forwards a channel video to the bot ──────────────
+# ─── Admin sends/forwards any video to the bot PM → auto-save ────────────────
 
 @Client.on_message(
     filters.private
     & filters.user(OWNER_ID)
     & (filters.video | filters.document)
 )
-async def admin_forwarded_video(client, message):
-    """If admin forwards a video from the video channel, auto-add it to DB."""
-    fwd_chat = getattr(message, "forward_from_chat", None)
-    if not fwd_chat or fwd_chat.id != VIDEO_CHANNEL_ID:
-        return
+async def admin_save_video(client, message):
+    """
+    Admin sends or forwards ANY video to the bot in PM → stored by file_id.
+    Works with direct uploads and channel forwards.
+    Use /delvideo <id> to remove. Use /stats to see totals.
+    """
+    file_id = None
+    file_type = "video"
+    duration = width = height = 0
 
-    msg_id = message.forward_from_message_id
-    if not msg_id:
-        return
-
-    result = await videos.update_one(
-        {"msg_id": msg_id},
-        {
-            "$setOnInsert": {
-                "msg_id": msg_id,
-                "channel_id": VIDEO_CHANNEL_ID,
-                "is_document": bool(message.document),
-                "indexed_at": datetime.utcnow(),
-            }
-        },
-        upsert=True,
-    )
-
-    if result.upserted_id:
-        total = await videos.count_documents({})
-        await message.reply_text(
-            f"✅ <b>Video added!</b>\n"
-            f"📦 Total videos in DB: <b>{total}</b>",
-            parse_mode=enums.ParseMode.HTML,
-        )
+    if message.video:
+        v = message.video
+        file_id = v.file_id
+        file_type = "video"
+        duration = v.duration or 0
+        width = v.width or 0
+        height = v.height or 0
+    elif (
+        message.document
+        and message.document.mime_type
+        and message.document.mime_type.startswith("video/")
+    ):
+        file_id = message.document.file_id
+        file_type = "document"
     else:
-        await message.reply_text("ℹ️ This video is already in the database.")
-
-
-# ─── /addvideo — add a video by its channel message ID ───────────────────────
-
-@Client.on_message(filters.command("addvideo") & filters.user(OWNER_ID))
-async def add_video_cmd(client, message):
-    """
-    Usage:
-      • /addvideo <msg_id>       — add by channel message ID
-      • Reply to a forwarded channel video with /addvideo
-    """
-    msg_id = None
-
-    # Case 1: reply to a forwarded message from the channel
-    if message.reply_to_message:
-        replied = message.reply_to_message
-        fwd_chat = getattr(replied, "forward_from_chat", None)
-        if fwd_chat and fwd_chat.id == VIDEO_CHANNEL_ID:
-            msg_id = replied.forward_from_message_id
-
-    # Case 2: explicit message ID argument
-    if msg_id is None and len(message.command) > 1:
-        try:
-            msg_id = int(message.command[1])
-        except ValueError:
-            await message.reply_text(
-                "❌ <b>Invalid ID.</b> Usage: <code>/addvideo 12345</code>",
-                parse_mode=enums.ParseMode.HTML,
-            )
-            return
-
-    if msg_id is None:
-        await message.reply_text(
-            "❌ <b>Usage:</b>\n"
-            "• <code>/addvideo &lt;msg_id&gt;</code> — add a video by its channel message ID\n"
-            "• Forward a video from the channel here and reply with <code>/addvideo</code>",
-            parse_mode=enums.ParseMode.HTML,
-        )
+        # Not a usable video — ignore silently
         return
 
-    # Verify the message exists and has a video
-    try:
-        ch_msg = await client.get_messages(VIDEO_CHANNEL_ID, msg_id)
-    except Exception as e:
-        await message.reply_text(
-            f"❌ Could not fetch message <code>{msg_id}</code> from the channel.\n"
-            f"<code>{e}</code>",
-            parse_mode=enums.ParseMode.HTML,
-        )
-        return
-
-    is_video = bool(ch_msg and ch_msg.video)
-    is_doc_video = (
-        ch_msg
-        and ch_msg.document
-        and ch_msg.document.mime_type
-        and ch_msg.document.mime_type.startswith("video/")
-    )
-    if not (is_video or is_doc_video):
-        await message.reply_text(
-            f"⚠️ Message <code>{msg_id}</code> is not a video.",
-            parse_mode=enums.ParseMode.HTML,
-        )
-        return
-
-    result = await videos.update_one(
-        {"msg_id": msg_id},
-        {
-            "$setOnInsert": {
-                "msg_id": msg_id,
-                "channel_id": VIDEO_CHANNEL_ID,
-                "is_document": bool(ch_msg.document),
-                "indexed_at": datetime.utcnow(),
-            }
-        },
-        upsert=True,
-    )
+    await videos.insert_one({
+        "file_id": file_id,
+        "file_type": file_type,
+        "caption": message.caption or "",
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "added_at": datetime.utcnow(),
+    })
 
     total = await videos.count_documents({})
-    if result.upserted_id:
-        await message.reply_text(
-            f"✅ <b>Video {msg_id} added!</b>\n"
-            f"📦 Total videos in DB: <b>{total}</b>",
-            parse_mode=enums.ParseMode.HTML,
-        )
+    await message.reply_text(
+        f"✅ <b>Video saved!</b>\n"
+        f"📦 Total videos in DB: <b>{total}</b>\n\n"
+        f"<i>Users can now receive this video via /video.</i>",
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+
+# ─── Auto-capture videos posted directly to the channel ──────────────────────
+
+@Client.on_message(filters.chat(VIDEO_CHANNEL_ID))
+async def auto_index_new_video(client, message):
+    """Save file_id when a video is posted to the channel."""
+    file_id = None
+    file_type = "video"
+    duration = width = height = 0
+
+    if message.video:
+        v = message.video
+        file_id = v.file_id
+        duration = v.duration or 0
+        width = v.width or 0
+        height = v.height or 0
+    elif (
+        message.document
+        and message.document.mime_type
+        and message.document.mime_type.startswith("video/")
+    ):
+        file_id = message.document.file_id
+        file_type = "document"
     else:
-        await message.reply_text(
-            f"ℹ️ Video <code>{msg_id}</code> is already in the database.\n"
-            f"📦 Total videos in DB: <b>{total}</b>",
-            parse_mode=enums.ParseMode.HTML,
-        )
+        return
+
+    await videos.insert_one({
+        "file_id": file_id,
+        "file_type": file_type,
+        "caption": message.caption or "",
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "added_at": datetime.utcnow(),
+    })
 
 
-# ─── /delvideo — remove a video from DB ──────────────────────────────────────
+# ─── /delvideo <index> — remove a video by its position number ───────────────
 
 @Client.on_message(filters.command("delvideo") & filters.user(OWNER_ID))
 async def del_video_cmd(client, message):
     if len(message.command) < 2:
         await message.reply_text(
-            "❌ Usage: <code>/delvideo &lt;msg_id&gt;</code>",
+            "❌ Usage: <code>/delvideo &lt;number&gt;</code>\n"
+            "Use /stats to see video count.",
             parse_mode=enums.ParseMode.HTML,
         )
         return
     try:
-        msg_id = int(message.command[1])
+        index = int(message.command[1]) - 1  # 1-based for the user
     except ValueError:
-        await message.reply_text("❌ Invalid ID.", parse_mode=enums.ParseMode.HTML)
+        await message.reply_text("❌ Invalid number.", parse_mode=enums.ParseMode.HTML)
         return
 
-    result = await videos.delete_one({"msg_id": msg_id})
+    all_vids = await videos.find({}, {"_id": 1}).to_list(length=None)
+    if index < 0 or index >= len(all_vids):
+        await message.reply_text(
+            f"⚠️ No video at position {index + 1}. Total: {len(all_vids)}",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    target_id = all_vids[index]["_id"]
+    await videos.delete_one({"_id": target_id})
     total = await videos.count_documents({})
-    if result.deleted_count:
-        await message.reply_text(
-            f"🗑 Video <code>{msg_id}</code> removed.\n"
-            f"📦 Videos remaining: <b>{total}</b>",
-            parse_mode=enums.ParseMode.HTML,
-        )
-    else:
-        await message.reply_text(
-            f"⚠️ Video <code>{msg_id}</code> not found in DB.",
-            parse_mode=enums.ParseMode.HTML,
-        )
+    await message.reply_text(
+        f"🗑 Video #{index + 1} removed.\n"
+        f"📦 Videos remaining: <b>{total}</b>",
+        parse_mode=enums.ParseMode.HTML,
+    )
 
 
 # ─── /stats ───────────────────────────────────────────────────────────────────
@@ -219,7 +152,7 @@ async def stats_cmd(client, message):
 async def broadcast_cmd(client, message):
     if not message.reply_to_message:
         await message.reply_text(
-            "❌ <b>Usage:</b> Reply to any message with /broadcast to send it to all users.",
+            "❌ <b>Usage:</b> Reply to any message with /broadcast.",
             parse_mode=enums.ParseMode.HTML,
         )
         return
@@ -255,7 +188,7 @@ async def broadcast_cmd(client, message):
     await status_msg.edit_text(
         "✅ <b>Broadcast complete!</b>\n\n"
         f"✅ Delivered: <b>{success}</b>\n"
-        f"❌ Failed (blocked/deleted): <b>{failed}</b>\n"
+        f"❌ Failed: <b>{failed}</b>\n"
         f"👥 Total: <b>{total}</b>",
         parse_mode=enums.ParseMode.HTML,
     )

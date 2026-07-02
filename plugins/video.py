@@ -56,58 +56,38 @@ async def video_cmd(client, message):
         )
         return
 
-    # Fetch video list
+    # Fetch video list from DB
     video_list = await videos.find().to_list(length=500)
     if not video_list:
         await message.reply_text(
             "❌ <b>No videos available yet.</b>\n\n"
-            "The admin hasn't added any videos. Please check back later!",
+            "Please check back later!",
             parse_mode=enums.ParseMode.HTML,
         )
         return
 
-    # Pick a random video and send with spoiler
+    # Pick a random video and send using stored file_id (no channel access needed)
     video_doc = random.choice(video_list)
+    file_id = video_doc.get("file_id")
+    file_type = video_doc.get("file_type", "video")
+
     try:
-        channel_msg = await client.get_messages(VIDEO_CHANNEL_ID, video_doc["msg_id"])
-
-        # Detect media (video or document-video)
-        media = None
-        is_document = False
-        if channel_msg and channel_msg.video:
-            media = channel_msg.video
-        elif (
-            channel_msg
-            and channel_msg.document
-            and channel_msg.document.mime_type
-            and channel_msg.document.mime_type.startswith("video/")
-        ):
-            media = channel_msg.document
-            is_document = True
-
-        if not media:
-            await videos.delete_one({"msg_id": video_doc["msg_id"]})
-            await message.reply_text(
-                "⚠️ That video is no longer available. Please use /video again.",
-                parse_mode=enums.ParseMode.HTML,
-            )
-            return
-
-        if is_document:
-            await client.send_document(
-                chat_id=message.chat.id,
-                document=media.file_id,
-                caption=channel_msg.caption or "",
-            )
-        else:
+        if file_type == "video":
             await client.send_video(
                 chat_id=message.chat.id,
-                video=media.file_id,
-                caption=channel_msg.caption or "",
+                video=file_id,
+                caption=video_doc.get("caption", ""),
                 has_spoiler=True,
-                duration=media.duration,
-                width=media.width,
-                height=media.height,
+                duration=video_doc.get("duration", 0),
+                width=video_doc.get("width", 0),
+                height=video_doc.get("height", 0),
+            )
+        else:
+            # Document-type video (sent without compression)
+            await client.send_document(
+                chat_id=message.chat.id,
+                document=file_id,
+                caption=video_doc.get("caption", ""),
             )
 
         new_count = video_count + 1
