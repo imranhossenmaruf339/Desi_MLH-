@@ -17,33 +17,51 @@ from database import users, videos
 async def admin_save_video(client, message):
     """
     Admin sends or forwards ANY video to the bot in PM → stored by file_id.
-    Works with direct uploads and channel forwards.
+    Document-type videos are re-sent as proper video to obtain a spoiler-capable file_id.
     """
     file_id = None
     file_type = "video"
     duration = width = height = 0
+    caption = message.caption or ""
 
     if message.video:
         v = message.video
         file_id = v.file_id
-        file_type = "video"
         duration = v.duration or 0
         width = v.width or 0
         height = v.height or 0
+
     elif (
         message.document
         and message.document.mime_type
         and message.document.mime_type.startswith("video/")
     ):
-        file_id = message.document.file_id
-        file_type = "document"
+        # Re-send as video so Telegram converts it and we get a spoiler-capable file_id
+        try:
+            tmp = await client.send_video(
+                chat_id=message.chat.id,
+                video=message.document.file_id,
+                caption="",
+            )
+            file_id = tmp.video.file_id
+            duration = tmp.video.duration or 0
+            width = tmp.video.width or 0
+            height = tmp.video.height or 0
+            await tmp.delete()          # clean up the temporary message
+        except Exception:
+            # Fallback: store as document (no spoiler support)
+            file_id = message.document.file_id
+            file_type = "document"
     else:
         return
+
+    # Check if DB was empty before this insert
+    count_before = await videos.count_documents({})
 
     await videos.insert_one({
         "file_id": file_id,
         "file_type": file_type,
-        "caption": message.caption or "",
+        "caption": caption,
         "duration": duration,
         "width": width,
         "height": height,
@@ -51,12 +69,35 @@ async def admin_save_video(client, message):
     })
 
     total = await videos.count_documents({})
+
+    # If DB was empty, notify all users that videos are now available
+    if count_before == 0 and total > 0:
+        asyncio.create_task(_notify_users_videos_available(client))
+
     await message.reply_text(
         f"✅ <b>Video saved!</b>\n"
         f"📦 Total videos in DB: <b>{total}</b>\n\n"
         f"<i>Users can now receive this video via /video.</i>",
         parse_mode=enums.ParseMode.HTML,
     )
+
+
+async def _notify_users_videos_available(client):
+    """Notify all users that the video library is now available."""
+    all_users = await users.find({}, {"user_id": 1}).to_list(length=None)
+    for u in all_users:
+        try:
+            await client.send_message(
+                chat_id=u["user_id"],
+                text=(
+                    "🎬 <b>Videos are now available!</b>\n\n"
+                    "The video library just got stocked. Use /video to watch! 🔥"
+                ),
+                parse_mode=enums.ParseMode.HTML,
+            )
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
 
 
 # ─── Auto-capture videos posted directly to the channel ──────────────────────
@@ -107,7 +148,7 @@ async def del_video_cmd(client, message):
         )
         return
     try:
-        index = int(message.command[1]) - 1  # 1-based for the user
+        index = int(message.command[1]) - 1
     except ValueError:
         await message.reply_text("❌ Invalid number.", parse_mode=enums.ParseMode.HTML)
         return
@@ -167,10 +208,7 @@ async def broadcast_cmd(client, message):
         parse_mode=enums.ParseMode.HTML,
     )
 
-    # Detect whether the source message has inline buttons.
-    # copy_message strips reply_markup; forward_messages preserves it.
     has_buttons = bool(message.reply_to_message.reply_markup)
-
     success = 0
     failed = 0
 

@@ -65,6 +65,7 @@ async def video_cmd(client, message):
             "referrals": 0,
             "video_count": 0,
             "video_window_start": window,
+            "joined_at": datetime.utcnow(),
         })
         user = await users.find_one({"user_id": user_id})
 
@@ -90,18 +91,23 @@ async def video_cmd(client, message):
             {"$set": {"video_count": 0, "video_window_start": current_window}},
         )
 
-    # ── Daily limit reached ───────────────────────────────────────────────────
+    # ── Daily limit reached → show 2-channel unlock options ──────────────────
     if video_count >= VIDEO_DAILY_LIMIT:
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Join Channel", url=JOIN_CHANNEL_LINK)],
-            [InlineKeyboardButton("✅ I've Joined — Confirm", callback_data=f"confirm_join:{user_id}")],
+            # Channel 1 — auto-verified by bot
+            [InlineKeyboardButton("📢 Join Channel 1", url=JOIN_CHANNEL_2_LINK)],
+            [InlineKeyboardButton("✅ I Joined Channel 1 (Auto-Verify)", callback_data=f"auto_confirm:{user_id}")],
+            # Channel 2 — admin manually approves
+            [InlineKeyboardButton("📢 Join Channel 2", url=JOIN_CHANNEL_LINK)],
+            [InlineKeyboardButton("✅ I Joined Channel 2 (Send Request)", callback_data=f"confirm_join:{user_id}")],
         ])
         await message.reply_text(
             "⚠️ <b>Daily limit reached!</b>\n\n"
             f"You've used all <b>{VIDEO_DAILY_LIMIT} videos</b> for this period.\n\n"
-            "👉 Join our partner channel to get more access, "
-            "then tap <b>I've Joined — Confirm</b>.\n\n"
-            "🕐 Limits reset at <b>12:00 AM</b> and <b>12:00 PM</b> (UTC) daily.",
+            "👇 Join one of our channels below to unlock more videos:\n\n"
+            "▸ <b>Channel 1</b> — Verified automatically by the bot\n"
+            "▸ <b>Channel 2</b> — Verified by admin (manual approval)\n\n"
+            "🕐 Limits also reset at <b>12:00 AM</b> and <b>12:00 PM</b> (UTC) daily.",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=keyboard,
         )
@@ -118,9 +124,15 @@ async def video_cmd(client, message):
     all_vids = await videos.find().to_list(length=500)
     pool = [v for v in all_vids if v["_id"] not in seen_ids]
 
-    # If everything has been seen recently, fall back to the full pool
-    if not pool:
-        pool = all_vids
+    # All videos watched — notify user, do NOT fall back to re-sending seen ones
+    if not pool and all_vids:
+        await message.reply_text(
+            "🎬 <b>You've watched all available videos!</b>\n\n"
+            "New videos will be added soon. You'll be notified when they arrive! 🔔\n\n"
+            "Come back in a few days — watched videos also refresh after <b>7 days</b>.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
 
     if not pool:
         await message.reply_text(
@@ -131,11 +143,11 @@ async def video_cmd(client, message):
 
     video_doc = random.choice(pool)
     file_id = video_doc.get("file_id")
+    file_type = video_doc.get("file_type", "video")
 
     # ── Send the video with spoiler ───────────────────────────────────────────
-    # Always try send_video first so has_spoiler=True is applied.
-    # Documents cannot carry a spoiler; if the file_id only works as a document,
-    # we fall back to send_document (no spoiler — Telegram limitation).
+    # Always try send_video first → has_spoiler works only for video type.
+    # If the stored file_id is document-only, fall back to send_document (no spoiler).
     sent = None
     try:
         sent = await client.send_video(
@@ -149,7 +161,6 @@ async def video_cmd(client, message):
             reply_markup=JOIN_BUTTONS,
         )
     except Exception:
-        # file_id is a non-streamable document — send without spoiler
         try:
             sent = await client.send_document(
                 chat_id=message.chat.id,
@@ -178,3 +189,17 @@ async def video_cmd(client, message):
         {"user_id": user_id},
         {"$set": {"video_count": video_count + 1}},
     )
+
+    # Check if this was the last unseen video — notify user
+    remaining_pool = [v for v in all_vids if v["_id"] not in seen_ids and v["_id"] != video_doc["_id"]]
+    if not remaining_pool:
+        try:
+            await message.reply_text(
+                "🎬 <b>That was your last unseen video!</b>\n\n"
+                "You've now watched everything available. "
+                "New videos will be added soon — you'll get a notification! 🔔\n\n"
+                "Watched videos also refresh after <b>7 days</b>.",
+                parse_mode=enums.ParseMode.HTML,
+            )
+        except Exception:
+            pass
