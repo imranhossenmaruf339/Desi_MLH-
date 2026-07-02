@@ -68,24 +68,30 @@ async def video_cmd(client, message):
             {"$set": {"video_count": 0, "video_window_start": current_window}},
         )
 
-    # ── Daily limit reached → show 2-channel unlock options ──────────────────
+    # ── Daily limit reached → show unlock options ────────────────────────────
     if video_count >= VIDEO_DAILY_LIMIT:
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Join Channel 1", url=JOIN_CHANNEL_LINK)],
-            [InlineKeyboardButton("💎 Join VIP Channel", url=VIP_CHANNEL_LINK)],
-            [InlineKeyboardButton("✅ Confirmed", callback_data=f"confirm_join:{user_id}")],
+            # Row 1 — both join buttons side by side
+            [
+                InlineKeyboardButton("📢 Channel 1", url=JOIN_CHANNEL_LINK),
+                InlineKeyboardButton("💎 VIP Channel", url=VIP_CHANNEL_LINK),
+            ],
+            # Row 2 — single confirm button
+            [InlineKeyboardButton("✅ Confirmed — Unlock +15 Videos", callback_data=f"confirm_join:{user_id}")],
         ])
         sent = await message.reply_text(
-            "⚠️ <b>You Have Reached your Limit!</b>\n\n"
-            "Come Again After <b>12:00</b> 🕛\n\n"
-            "Or join our channels and get <b>+15 extra videos</b>:\n\n"
-            "1️⃣ Join <b>Channel 1</b>\n"
-            "2️⃣ Join <b>VIP Channel</b>\n\n"
-            "After joining, tap <b>✅ Confirmed</b> — admin will verify and unlock your videos.",
+            "🔥 <b>Daily Limit Reached!</b>\n"
+            "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n"
+            "⏰ Come back after <b>12:00</b> for a free reset.\n\n"
+            "💡 <b>Want more right now?</b>\n"
+            "Join our channels and unlock <b>+15 bonus videos</b> instantly!\n\n"
+            "🎬 <i>Our VIP Channel drops exclusive, never-seen content daily — "
+            "hot videos, behind-the-scenes, and members-only drops you won't find anywhere else.</i>\n\n"
+            "👇 <b>Join both channels below, then tap Confirmed:</b>",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=keyboard,
         )
-        # Delete limit message in groups after 90 s (user needs time to tap buttons)
+        # Delete limit message in groups after 90 s (user needs time to tap the button)
         if in_group and sent:
             asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 90))
         return
