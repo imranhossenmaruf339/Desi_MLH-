@@ -27,3 +27,8 @@ args = "python bot.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[userenv]
+
+[userenv.shared]
+LOG_GROUP_ID = "-1003876863435"

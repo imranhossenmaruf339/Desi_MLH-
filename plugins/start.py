@@ -3,6 +3,7 @@ from pyrogram import Client, filters, enums
 from config import LOG_GROUP_ID
 from database import users
 from helpers import get_current_window_start
+from plugins.welcome import WELCOME_TEXT
 
 
 @Client.on_message(filters.command("start") & filters.private)
@@ -28,7 +29,7 @@ async def start(client, message):
     else:
         status_label = "🔁 Returning user"
 
-    # Send notification to the log group (or owner DM if LOG_GROUP_ID not set)
+    # Notify the log group every time someone starts the bot
     try:
         await client.send_message(
             chat_id=LOG_GROUP_ID,
@@ -44,8 +45,9 @@ async def start(client, message):
     except Exception:
         pass
 
+    # Send welcome message using the shared template
+    name = user.first_name or user.username or "Friend"
     await message.reply_text(
-        "👋 <b>Welcome to UnityBot!</b>\n\n"
-        "Use /help to see available commands.",
+        WELCOME_TEXT.format(name=name),
         parse_mode=enums.ParseMode.HTML,
     )
