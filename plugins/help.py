@@ -8,6 +8,7 @@ async def help_cmd(client, message):
         "/help — Show this menu\n"
         "/profile — Your profile & stats\n"
         "/video — Get a random video 🎬\n\n"
-        "🕐 Video limit: <b>10 per 12 hours</b> (resets at 12 AM & 12 PM UTC)",
+        "🕐 Video limit: <b>10 per 12 hours</b>\n"
+        "Resets at 12:00 AM & 12:00 PM UTC daily.",
         parse_mode="html",
     )
