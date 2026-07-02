@@ -3,10 +3,9 @@ import random
 from datetime import datetime, timedelta
 
 from pyrogram import Client, filters, enums
-from pyrogram.errors import UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import JOIN_CHANNEL_LINK, JOIN_CHANNEL_2_LINK, JOIN_CHANNEL_2_USERNAME, VIDEO_DAILY_LIMIT
+from config import JOIN_CHANNEL_LINK, JOIN_CHANNEL_2_LINK, VIDEO_DAILY_LIMIT
 from database import users, videos, user_video_history
 from helpers import get_current_window_start
 
@@ -27,20 +26,6 @@ async def _delete_after(client, chat_id: int, message_id: int, delay: int = 1800
         await client.delete_messages(chat_id, message_id)
     except Exception:
         pass
-
-
-async def check_second_channel(client, user_id: int) -> bool:
-    """Returns True if the user is a member of the required channel."""
-    try:
-        member = await client.get_chat_member(JOIN_CHANNEL_2_USERNAME, user_id)
-        return member.status not in [
-            enums.ChatMemberStatus.BANNED,
-            enums.ChatMemberStatus.LEFT,
-        ]
-    except UserNotParticipant:
-        return False
-    except Exception:
-        return False
 
 
 # Works in private chats AND in any group where the bot is a member
@@ -68,16 +53,6 @@ async def video_cmd(client, message):
             "joined_at": datetime.utcnow(),
         })
         user = await users.find_one({"user_id": user_id})
-
-    # ── Channel membership check ──────────────────────────────────────────────
-    if not await check_second_channel(client, user_id):
-        await message.reply_text(
-            "⚠️ <b>You must join our channel to use this feature!</b>\n\n"
-            "👇 Tap <b>JOIN</b> below, join the channel, then send /video again.",
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=JOIN_BUTTONS,
-        )
-        return
 
     # ── 12-hour window check / reset ──────────────────────────────────────────
     current_window = get_current_window_start()
@@ -121,7 +96,7 @@ async def video_cmd(client, message):
     ).to_list(length=None)
     seen_ids = {h["video_id"] for h in recent}
 
-    all_vids = await videos.find().to_list(length=500)
+    all_vids = await videos.find().to_list(length=None)
     pool = [v for v in all_vids if v["_id"] not in seen_ids]
 
     # All videos watched — notify user, do NOT fall back to re-sending seen ones

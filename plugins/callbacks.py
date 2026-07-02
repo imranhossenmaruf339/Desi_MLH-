@@ -142,9 +142,16 @@ async def admin_approve(client, callback_query):
     user_id = int(callback_query.matches[0].group(1))
 
     current_window = get_current_window_start()
+    # Use $setOnInsert to seed required fields only when creating a new document
     await users.update_one(
         {"user_id": user_id},
-        {"$set": {"video_count": 0, "video_window_start": current_window}},
+        {
+            "$set": {"video_count": 0, "video_window_start": current_window},
+            "$setOnInsert": {
+                "points": 0, "referrals": 0,
+                "joined_at": datetime.utcnow(),
+            },
+        },
         upsert=True,
     )
     await video_requests.update_one(
