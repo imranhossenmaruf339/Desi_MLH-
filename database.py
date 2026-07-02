@@ -10,3 +10,4 @@ daily = db.daily
 videos = db.videos
 premium = db.premium
 logs = db.logs
+video_requests = db.video_requests
