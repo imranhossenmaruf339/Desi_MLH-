@@ -5,13 +5,9 @@ app = Client(
     "UnityBot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    bot_token=BOT_TOKEN,
+    plugins=dict(root="plugins")
 )
-
-# Import handler modules so their decorators register on the Client
-import start
-import help
-import profile
 
 print("Bot Started...")
 app.run()
