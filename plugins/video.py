@@ -1,45 +1,12 @@
 import random
 from datetime import datetime
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import OWNER_ID, VIDEO_CHANNEL_ID, JOIN_CHANNEL_LINK, VIDEO_DAILY_LIMIT
 from database import users, videos
 from helpers import get_current_window_start
-
-
-def _is_video_message(msg):
-    """Return True for proper video messages OR documents with a video mime type."""
-    if msg.video:
-        return True
-    if msg.document and msg.document.mime_type and msg.document.mime_type.startswith("video/"):
-        return True
-    return False
-
-
-async def index_channel_videos(client: Client):
-    """Scan the video channel, cache all video message IDs in MongoDB.
-    Returns (scanned, newly_added) counts.
-    """
-    scanned = 0
-    added = 0
-    try:
-        async for msg in client.get_chat_history(VIDEO_CHANNEL_ID):
-            scanned += 1
-            if _is_video_message(msg):
-                exists = await videos.find_one({"msg_id": msg.id})
-                if not exists:
-                    await videos.insert_one({
-                        "msg_id": msg.id,
-                        "channel_id": VIDEO_CHANNEL_ID,
-                        "is_document": bool(msg.document),
-                        "indexed_at": datetime.utcnow(),
-                    })
-                    added += 1
-    except Exception as e:
-        raise RuntimeError(f"Channel scan failed: {e}") from e
-    return scanned, added
 
 
 @Client.on_message(filters.command("video") & filters.private)
@@ -84,54 +51,49 @@ async def video_cmd(client, message):
             "👉 Join our partner channel to get more access, "
             "then tap <b>I've Joined — Confirm</b>.\n\n"
             "🕐 Limits reset at <b>12:00 AM</b> and <b>12:00 PM</b> (UTC) daily.",
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
             reply_markup=keyboard,
         )
         return
 
-    # Fetch video list; auto-index once if DB is empty
+    # Fetch video list
     video_list = await videos.find().to_list(length=500)
     if not video_list:
-        status_msg = await message.reply_text("⏳ Indexing videos, please wait…")
-        try:
-            scanned, added = await index_channel_videos(client)
-        except RuntimeError as e:
-            await status_msg.edit_text(f"❌ Could not index channel: <code>{e}</code>", parse_mode="html")
-            return
-        video_list = await videos.find().to_list(length=500)
-        await status_msg.delete()
-        if not video_list:
-            await message.reply_text(
-                f"❌ No videos found in the channel.\n"
-                f"<i>(Scanned {scanned} messages)</i>\n\n"
-                "Ask the admin to post videos in the channel first.",
-                parse_mode="html",
-            )
-            return
+        await message.reply_text(
+            "❌ <b>No videos available yet.</b>\n\n"
+            "The admin hasn't added any videos. Please check back later!",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
 
     # Pick a random video and send with spoiler
     video_doc = random.choice(video_list)
     try:
         channel_msg = await client.get_messages(VIDEO_CHANNEL_ID, video_doc["msg_id"])
 
-        # Detect media object (video or document-video)
+        # Detect media (video or document-video)
         media = None
-        send_as_doc = False
+        is_document = False
         if channel_msg and channel_msg.video:
             media = channel_msg.video
-        elif channel_msg and channel_msg.document and \
-                channel_msg.document.mime_type and \
-                channel_msg.document.mime_type.startswith("video/"):
+        elif (
+            channel_msg
+            and channel_msg.document
+            and channel_msg.document.mime_type
+            and channel_msg.document.mime_type.startswith("video/")
+        ):
             media = channel_msg.document
-            send_as_doc = True
+            is_document = True
 
         if not media:
             await videos.delete_one({"msg_id": video_doc["msg_id"]})
-            await message.reply_text("⚠️ That video is no longer available. Please use /video again.")
+            await message.reply_text(
+                "⚠️ That video is no longer available. Please use /video again.",
+                parse_mode=enums.ParseMode.HTML,
+            )
             return
 
-        if send_as_doc:
-            # Send document-videos as regular video using file_id
+        if is_document:
             await client.send_document(
                 chat_id=message.chat.id,
                 document=media.file_id,
@@ -164,11 +126,11 @@ async def video_cmd(client, message):
             f"🎬 Enjoy!\n"
             f"📊 <b>{remaining}</b> video(s) remaining this period.\n"
             f"{period_text}",
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
         )
 
     except Exception as e:
         await message.reply_text(
             f"❌ Failed to send video. Please try again.\n<code>{e}</code>",
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
         )
