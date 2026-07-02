@@ -74,27 +74,32 @@ async def confirm_join(client, callback_query):
     vip_id = bot_info.VIP_CHANNEL_ID
 
     if vip_id:
-        is_member = False
         try:
             member = await client.get_chat_member(vip_id, requester_id)
             is_member = member.status not in [
                 enums.ChatMemberStatus.BANNED,
                 enums.ChatMemberStatus.LEFT,
             ]
+            if not is_member:
+                await callback_query.answer(
+                    "❌ You haven't joined the VIP Channel yet!\n"
+                    "Please join first, then tap Confirmed again.",
+                    show_alert=True,
+                )
+                return
         except UserNotParticipant:
-            is_member = False
-        except Exception:
-            is_member = False
-
-        if not is_member:
+            # Telegram confirmed the user is not in the channel
             await callback_query.answer(
                 "❌ You haven't joined the VIP Channel yet!\n"
                 "Please join first, then tap Confirmed again.",
                 show_alert=True,
             )
             return
-    # If VIP_CHANNEL_ID is not configured, skip the membership check and
-    # proceed directly to sending the admin approval request.
+        except Exception:
+            # Cannot verify (bot not admin, network error, etc.) — let admin decide manually
+            pass
+    # If VIP_CHANNEL_ID is not configured OR check could not run, send request
+    # straight to the monitor group for admin manual verification.
 
     # ── Guard: already has a pending request ──────────────────────────────────
     existing = await video_requests.find_one({"user_id": requester_id, "status": "pending"})

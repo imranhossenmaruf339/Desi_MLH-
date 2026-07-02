@@ -24,7 +24,7 @@ def _make_welcome_keyboard(bot_username: str):
         )],
         # Row 2 — VIP channel + buy premium
         [
-            InlineKeyboardButton("💎 VIP Channel", url="https://t.me/+YcRBja2GjY4xMmRl"),
+            InlineKeyboardButton("💎 VIP Channel", url="https://t.me/+QuC95d9R5zI2MTM9"),
             InlineKeyboardButton("💳 Buy Premium", url="https://t.me/GhostinWhispers1"),
         ],
         # Row 3 — my status + share bot

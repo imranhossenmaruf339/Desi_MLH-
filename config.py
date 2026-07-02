@@ -11,7 +11,7 @@ MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL")
 
 VIDEO_CHANNEL_ID = -1002623940581
 JOIN_CHANNEL_LINK = "https://t.me/+YTZcUp9h0qYwNjc1"        # limit unlock — channel 1 join link
-VIP_CHANNEL_LINK  = "https://t.me/+YcRBja2GjY4xMmRl"        # limit unlock — VIP channel (bot is member)
+VIP_CHANNEL_LINK  = "https://t.me/+QuC95d9R5zI2MTM9"         # limit unlock — VIP channel (bot is member)
 _vip_raw = os.getenv("VIP_CHANNEL_ID", "")
 try:
     VIP_CHANNEL_ID = int(_vip_raw) or None   # numeric ID for membership checks; None disables check

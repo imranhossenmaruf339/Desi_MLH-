@@ -1,8 +1,10 @@
 import asyncio
+from datetime import datetime
 
 from pyrogram import Client, filters, enums
 
 from config import LOG_GROUP_ID
+from database import groups
 from helpers import schedule_delete
 
 
@@ -32,6 +34,17 @@ async def on_new_chat_members(client, message):
 
             group_title = message.chat.title or "Unknown Group"
             group_id = message.chat.id
+
+            # Save group to DB for broadcast
+            await groups.update_one(
+                {"group_id": group_id},
+                {"$set": {
+                    "group_id": group_id,
+                    "title": group_title,
+                    "added_at": datetime.utcnow(),
+                }},
+                upsert=True,
+            )
 
             try:
                 await client.send_message(

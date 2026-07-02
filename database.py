@@ -12,6 +12,7 @@ premium = db.premium
 logs = db.logs
 video_requests = db.video_requests
 user_video_history = db.user_video_history   # tracks which videos each user has seen (7-day cooldown)
+groups = db.groups                           # groups the bot has been added to
 
 
 async def ensure_indexes():

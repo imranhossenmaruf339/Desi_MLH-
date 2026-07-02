@@ -4,7 +4,7 @@ from datetime import datetime
 from pyrogram import Client, filters, enums
 
 from config import OWNER_ID, VIDEO_CHANNEL_ID, LOG_GROUP_ID
-from database import users, videos
+from database import users, videos, groups
 
 
 # ─── Admin sends/forwards any video to the bot PM → auto-save ────────────────
@@ -238,34 +238,46 @@ async def broadcast_cmd(client, message):
         parse_mode=enums.ParseMode.HTML,
     )
 
-    has_buttons = bool(message.reply_to_message.reply_markup)
-    success = 0
-    failed = 0
+    all_group_docs = await groups.find({}, {"group_id": 1}).to_list(length=None)
+    total_groups = len(all_group_docs)
 
+    await status_msg.edit_text(
+        f"📡 Broadcasting to <b>{total}</b> users and <b>{total_groups}</b> groups…",
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+    success = failed = 0
+
+    # ── Send to all individual users (copy — no "Forwarded from" header) ─────
     for user_doc in all_users:
-        uid = user_doc["user_id"]
         try:
-            if has_buttons:
-                await client.forward_messages(
-                    chat_id=uid,
-                    from_chat_id=message.chat.id,
-                    message_ids=message.reply_to_message.id,
-                )
-            else:
-                await client.copy_message(
-                    chat_id=uid,
-                    from_chat_id=message.chat.id,
-                    message_id=message.reply_to_message.id,
-                )
+            await client.copy_message(
+                chat_id=user_doc["user_id"],
+                from_chat_id=message.chat.id,
+                message_id=message.reply_to_message.id,
+            )
             success += 1
         except Exception:
             failed += 1
         await asyncio.sleep(0.05)
 
+    # ── Send to all groups ────────────────────────────────────────────────────
+    g_success = g_failed = 0
+    for group_doc in all_group_docs:
+        try:
+            await client.copy_message(
+                chat_id=group_doc["group_id"],
+                from_chat_id=message.chat.id,
+                message_id=message.reply_to_message.id,
+            )
+            g_success += 1
+        except Exception:
+            g_failed += 1
+        await asyncio.sleep(0.05)
+
     await status_msg.edit_text(
         "✅ <b>Broadcast complete!</b>\n\n"
-        f"✅ Delivered: <b>{success}</b>\n"
-        f"❌ Failed: <b>{failed}</b>\n"
-        f"👥 Total: <b>{total}</b>",
+        f"👥 Users — ✅ {success}  ❌ {failed}\n"
+        f"🏘 Groups — ✅ {g_success}  ❌ {g_failed}",
         parse_mode=enums.ParseMode.HTML,
     )
