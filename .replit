@@ -32,3 +32,4 @@ outputType = "console"
 
 [userenv.shared]
 LOG_GROUP_ID = "-1003876863435"
+VIP_CHANNEL_ID = "-1002314377422"

@@ -69,12 +69,12 @@ async def confirm_join(client, callback_query):
         await callback_query.answer("❌ This button is not for you.", show_alert=True)
         return
 
-    # ── Check VIP channel membership ─────────────────────────────────────────
+    # ── Check VIP channel membership (only when channel ID is configured) ────
     import bot_info
     vip_id = bot_info.VIP_CHANNEL_ID
-    is_member = False
 
     if vip_id:
+        is_member = False
         try:
             member = await client.get_chat_member(vip_id, requester_id)
             is_member = member.status not in [
@@ -86,13 +86,15 @@ async def confirm_join(client, callback_query):
         except Exception:
             is_member = False
 
-    if not is_member:
-        await callback_query.answer(
-            "❌ You haven't joined the VIP Channel yet!\n"
-            "Please join first, then tap Confirmed again.",
-            show_alert=True,
-        )
-        return
+        if not is_member:
+            await callback_query.answer(
+                "❌ You haven't joined the VIP Channel yet!\n"
+                "Please join first, then tap Confirmed again.",
+                show_alert=True,
+            )
+            return
+    # If VIP_CHANNEL_ID is not configured, skip the membership check and
+    # proceed directly to sending the admin approval request.
 
     # ── Guard: already has a pending request ──────────────────────────────────
     existing = await video_requests.find_one({"user_id": requester_id, "status": "pending"})
