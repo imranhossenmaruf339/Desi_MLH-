@@ -1,13 +1,16 @@
+import asyncio
+
 from pyrogram import Client, filters, enums
 
 from config import LOG_GROUP_ID
+from helpers import schedule_delete
 
 
 @Client.on_message(filters.new_chat_members & filters.group)
 async def on_new_chat_members(client, message):
     """
     - When the bot itself is added to a group → notify the monitor group.
-    - When a real user joins → send the welcome message in the group.
+    - When a real user joins → send welcome message, auto-delete after 30 s.
     """
     import bot_info
     from plugins.start import WELCOME_TEXT, _make_welcome_keyboard
@@ -51,15 +54,17 @@ async def on_new_chat_members(client, message):
         if member.is_bot:
             continue
 
-        # ── Real user joined → send welcome ───────────────────────────────────
+        # ── Real user joined → send welcome, delete after 30 s ───────────────
         name = member.first_name or member.username or "Friend"
         keyboard = _make_welcome_keyboard(bot_info.BOT_USERNAME) if bot_info.BOT_USERNAME else None
 
         try:
-            await message.reply_text(
+            sent = await message.reply_text(
                 WELCOME_TEXT.format(name=name),
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=keyboard,
             )
+            if sent:
+                asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 30))
         except Exception:
             pass

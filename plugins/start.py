@@ -1,10 +1,11 @@
+import asyncio
 from datetime import datetime
 
 from pyrogram import Client, filters, enums
 
 from config import LOG_GROUP_ID
 from database import users
-from helpers import get_current_window_start
+from helpers import get_current_window_start, schedule_delete
 
 
 def _make_welcome_keyboard(bot_username: str):
@@ -62,6 +63,7 @@ async def start(client, message):
     user_id = message.from_user.id
     user = message.from_user
     username = f"@{user.username}" if user.username else "N/A"
+    in_group = message.chat.type != enums.ChatType.PRIVATE
 
     existing = await users.find_one({"user_id": user_id})
 
@@ -101,8 +103,12 @@ async def start(client, message):
     name = user.first_name or user.username or "Friend"
     keyboard = _make_welcome_keyboard(bot_info.BOT_USERNAME) if bot_info.BOT_USERNAME else None
 
-    await message.reply_text(
+    sent = await message.reply_text(
         WELCOME_TEXT.format(name=name),
         parse_mode=enums.ParseMode.HTML,
         reply_markup=keyboard,
     )
+
+    # Auto-delete /start reply in groups after 30 seconds
+    if in_group and sent:
+        asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 30))

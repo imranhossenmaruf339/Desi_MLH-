@@ -5,18 +5,19 @@ from datetime import datetime, timedelta
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import JOIN_CHANNEL_LINK, JOIN_CHANNEL_2_LINK, VIDEO_DAILY_LIMIT
+from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT
 from database import users, videos, user_video_history
-from helpers import get_current_window_start
+from helpers import get_current_window_start, schedule_delete
 
 
-# Two JOIN buttons shown under every video
-JOIN_BUTTONS = InlineKeyboardMarkup([
-    [
-        InlineKeyboardButton("JOIN", url=JOIN_CHANNEL_LINK),
-        InlineKeyboardButton("JOIN", url=JOIN_CHANNEL_2_LINK),
-    ]
-])
+# Two JOIN buttons shown under every video (always visible)
+def _join_buttons():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("JOIN", url=JOIN_CHANNEL_LINK),
+            InlineKeyboardButton("JOIN", url=VIP_CHANNEL_LINK),
+        ]
+    ])
 
 
 async def _delete_after(client, chat_id: int, message_id: int, delay: int = 1800):
@@ -37,6 +38,7 @@ async def video_cmd(client, message):
         return
 
     user_id = message.from_user.id
+    in_group = message.chat.type != enums.ChatType.PRIVATE
 
     # ── Ensure user record exists ─────────────────────────────────────────────
     user = await users.find_one({"user_id": user_id})
@@ -69,23 +71,23 @@ async def video_cmd(client, message):
     # ── Daily limit reached → show 2-channel unlock options ──────────────────
     if video_count >= VIDEO_DAILY_LIMIT:
         keyboard = InlineKeyboardMarkup([
-            # Channel 1 — auto-verified by bot
-            [InlineKeyboardButton("📢 Join Channel 1", url=JOIN_CHANNEL_2_LINK)],
-            [InlineKeyboardButton("✅ I Joined Channel 1 (Auto-Verify)", callback_data=f"auto_confirm:{user_id}")],
-            # Channel 2 — admin manually approves
-            [InlineKeyboardButton("📢 Join Channel 2", url=JOIN_CHANNEL_LINK)],
-            [InlineKeyboardButton("✅ I Joined Channel 2 (Send Request)", callback_data=f"confirm_join:{user_id}")],
+            [InlineKeyboardButton("📢 Join Channel 1", url=JOIN_CHANNEL_LINK)],
+            [InlineKeyboardButton("💎 Join VIP Channel", url=VIP_CHANNEL_LINK)],
+            [InlineKeyboardButton("✅ Confirmed", callback_data=f"confirm_join:{user_id}")],
         ])
-        await message.reply_text(
-            "⚠️ <b>Daily limit reached!</b>\n\n"
-            f"You've used all <b>{VIDEO_DAILY_LIMIT} videos</b> for this period.\n\n"
-            "👇 Join one of our channels below to unlock more videos:\n\n"
-            "▸ <b>Channel 1</b> — Verified automatically by the bot\n"
-            "▸ <b>Channel 2</b> — Verified by admin (manual approval)\n\n"
-            "🕐 Limits also reset at <b>12:00 AM</b> and <b>12:00 PM</b> (UTC) daily.",
+        sent = await message.reply_text(
+            "⚠️ <b>You Have Reached your Limit!</b>\n\n"
+            "Come Again After <b>12:00</b> 🕛\n\n"
+            "Or join our channels and get <b>+15 extra videos</b>:\n\n"
+            "1️⃣ Join <b>Channel 1</b>\n"
+            "2️⃣ Join <b>VIP Channel</b>\n\n"
+            "After joining, tap <b>✅ Confirmed</b> — admin will verify and unlock your videos.",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=keyboard,
         )
+        # Delete limit message in groups after 90 s (user needs time to tap buttons)
+        if in_group and sent:
+            asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 90))
         return
 
     # ── Pick a video not seen by this user in the last 7 days ────────────────
@@ -101,24 +103,27 @@ async def video_cmd(client, message):
 
     # All videos watched — notify user, do NOT fall back to re-sending seen ones
     if not pool and all_vids:
-        await message.reply_text(
+        sent = await message.reply_text(
             "🎬 <b>You've watched all available videos!</b>\n\n"
             "New videos will be added soon. You'll be notified when they arrive! 🔔\n\n"
             "Come back in a few days — watched videos also refresh after <b>7 days</b>.",
             parse_mode=enums.ParseMode.HTML,
         )
+        if in_group and sent:
+            asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 30))
         return
 
     if not pool:
-        await message.reply_text(
+        sent = await message.reply_text(
             "❌ <b>No videos available yet.</b>\n\nPlease check back later!",
             parse_mode=enums.ParseMode.HTML,
         )
+        if in_group and sent:
+            asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 30))
         return
 
     video_doc = random.choice(pool)
     file_id = video_doc.get("file_id")
-    file_type = video_doc.get("file_type", "video")
 
     # ── Send the video with spoiler ───────────────────────────────────────────
     # Always try send_video first → has_spoiler works only for video type.
@@ -133,7 +138,7 @@ async def video_cmd(client, message):
             duration=video_doc.get("duration", 0),
             width=video_doc.get("width", 0),
             height=video_doc.get("height", 0),
-            reply_markup=JOIN_BUTTONS,
+            reply_markup=_join_buttons(),
         )
     except Exception:
         try:
@@ -141,13 +146,15 @@ async def video_cmd(client, message):
                 chat_id=message.chat.id,
                 document=file_id,
                 caption=video_doc.get("caption", ""),
-                reply_markup=JOIN_BUTTONS,
+                reply_markup=_join_buttons(),
             )
         except Exception as e:
-            await message.reply_text(
+            err = await message.reply_text(
                 f"❌ Failed to send video. Please try again.\n<code>{e}</code>",
                 parse_mode=enums.ParseMode.HTML,
             )
+            if in_group and err:
+                asyncio.create_task(schedule_delete(client, message.chat.id, err.id, 30))
             return
 
     # ── Schedule auto-delete after 30 minutes ────────────────────────────────
@@ -169,12 +176,14 @@ async def video_cmd(client, message):
     remaining_pool = [v for v in all_vids if v["_id"] not in seen_ids and v["_id"] != video_doc["_id"]]
     if not remaining_pool:
         try:
-            await message.reply_text(
+            note = await message.reply_text(
                 "🎬 <b>That was your last unseen video!</b>\n\n"
                 "You've now watched everything available. "
                 "New videos will be added soon — you'll get a notification! 🔔\n\n"
                 "Watched videos also refresh after <b>7 days</b>.",
                 parse_mode=enums.ParseMode.HTML,
             )
+            if in_group and note:
+                asyncio.create_task(schedule_delete(client, message.chat.id, note.id, 30))
         except Exception:
             pass

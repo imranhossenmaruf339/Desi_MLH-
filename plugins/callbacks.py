@@ -4,12 +4,12 @@ from pyrogram import Client, filters, enums
 from pyrogram.errors import UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import OWNER_ID, JOIN_CHANNEL_LINK, JOIN_CHANNEL_2_USERNAME, LOG_GROUP_ID
+from config import OWNER_ID, JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, JOIN_CHANNEL_2_USERNAME, LOG_GROUP_ID
 from database import users, video_requests, user_video_history
 from helpers import get_current_window_start
 
 
-# ─── Auto-verify: bot checks channel 1 membership ────────────────────────────
+# ─── Auto-verify: legacy handler (the_couple_vibe channel) ───────────────────
 
 @Client.on_callback_query(filters.regex(r"^auto_confirm:(\d+)$"))
 async def auto_confirm(client, callback_query):
@@ -20,7 +20,6 @@ async def auto_confirm(client, callback_query):
         await callback_query.answer("❌ This button is not for you.", show_alert=True)
         return
 
-    # Check membership in channel 1 (JOIN_CHANNEL_2_USERNAME = the_couple_vibe)
     is_member = False
     try:
         member = await client.get_chat_member(JOIN_CHANNEL_2_USERNAME, requester_id)
@@ -40,7 +39,6 @@ async def auto_confirm(client, callback_query):
         )
         return
 
-    # Reset the 12-hour video limit
     current_window = get_current_window_start()
     await users.update_one(
         {"user_id": requester_id},
@@ -60,7 +58,7 @@ async def auto_confirm(client, callback_query):
         pass
 
 
-# ─── Manual verify: user requests admin approval ──────────────────────────────
+# ─── Confirmed button: check VIP channel → send request to monitor group ─────
 
 @Client.on_callback_query(filters.regex(r"^confirm_join:(\d+)$"))
 async def confirm_join(client, callback_query):
@@ -71,6 +69,32 @@ async def confirm_join(client, callback_query):
         await callback_query.answer("❌ This button is not for you.", show_alert=True)
         return
 
+    # ── Check VIP channel membership ─────────────────────────────────────────
+    import bot_info
+    vip_id = bot_info.VIP_CHANNEL_ID
+    is_member = False
+
+    if vip_id:
+        try:
+            member = await client.get_chat_member(vip_id, requester_id)
+            is_member = member.status not in [
+                enums.ChatMemberStatus.BANNED,
+                enums.ChatMemberStatus.LEFT,
+            ]
+        except UserNotParticipant:
+            is_member = False
+        except Exception:
+            is_member = False
+
+    if not is_member:
+        await callback_query.answer(
+            "❌ You haven't joined the VIP Channel yet!\n"
+            "Please join first, then tap Confirmed again.",
+            show_alert=True,
+        )
+        return
+
+    # ── Guard: already has a pending request ──────────────────────────────────
     existing = await video_requests.find_one({"user_id": requester_id, "status": "pending"})
     if existing:
         await callback_query.answer(
@@ -89,7 +113,7 @@ async def confirm_join(client, callback_query):
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve:{requester_id}"),
+            InlineKeyboardButton("✅ Approve (+15 videos)", callback_data=f"admin_approve:{requester_id}"),
             InlineKeyboardButton("❌ Decline", callback_data=f"admin_decline:{requester_id}"),
         ]
     ])
@@ -100,17 +124,17 @@ async def confirm_join(client, callback_query):
         else "N/A"
     )
 
-    # Send to monitor group, not bot inbox
     try:
         await client.send_message(
             chat_id=LOG_GROUP_ID,
             text=(
-                "📋 <b>Join Verification Request</b>\n\n"
+                "📋 <b>VIP Channel Verification Request</b>\n\n"
                 f"👤 Name: {callback_query.from_user.first_name}\n"
-                f"🆔 Username: {username_display}\n"
+                f"🔖 Username: {username_display}\n"
                 f"🔢 User ID: <code>{requester_id}</code>\n\n"
-                "Claims to have joined <b>Channel 2</b>.\n"
-                f"🔗 {JOIN_CHANNEL_LINK}"
+                "✅ Confirmed joined <b>VIP Channel</b>.\n"
+                f"🔗 {VIP_CHANNEL_LINK}\n\n"
+                "Approve to grant <b>+15 extra videos</b>."
             ),
             parse_mode=enums.ParseMode.HTML,
             reply_markup=keyboard,
@@ -122,8 +146,8 @@ async def confirm_join(client, callback_query):
     try:
         await callback_query.message.edit_text(
             "⏳ <b>Request submitted!</b>\n\n"
-            "Your join confirmation has been sent to the admin.\n"
-            "You'll receive a message here once it's reviewed.",
+            "Your VIP channel join has been sent to the admin.\n"
+            "You'll receive a message once it's reviewed. 🔔",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=None,
         )
@@ -131,7 +155,7 @@ async def confirm_join(client, callback_query):
         pass
 
 
-# ─── Admin: approve ───────────────────────────────────────────────────────────
+# ─── Admin: approve → grant +15 videos ───────────────────────────────────────
 
 @Client.on_callback_query(filters.regex(r"^admin_approve:(\d+)$"))
 async def admin_approve(client, callback_query):
@@ -141,12 +165,14 @@ async def admin_approve(client, callback_query):
 
     user_id = int(callback_query.matches[0].group(1))
 
+    # Set video_count = LIMIT - 15 so the user can watch 15 more videos.
+    # e.g. LIMIT=10, count=-5 → needs 15 more watches to reach 10 again.
+    extra_count = VIDEO_DAILY_LIMIT - 15
     current_window = get_current_window_start()
-    # Use $setOnInsert to seed required fields only when creating a new document
     await users.update_one(
         {"user_id": user_id},
         {
-            "$set": {"video_count": 0, "video_window_start": current_window},
+            "$set": {"video_count": extra_count, "video_window_start": current_window},
             "$setOnInsert": {
                 "points": 0, "referrals": 0,
                 "joined_at": datetime.utcnow(),
@@ -164,7 +190,8 @@ async def admin_approve(client, callback_query):
             chat_id=user_id,
             text=(
                 "✅ <b>Approved!</b>\n\n"
-                "Your video limit has been reset. Use /video to continue. Enjoy! 🎬"
+                "You've been granted <b>+15 extra videos</b>! 🎬\n"
+                "Use /video to continue watching. Enjoy! 🔥"
             ),
             parse_mode=enums.ParseMode.HTML,
         )
@@ -174,13 +201,13 @@ async def admin_approve(client, callback_query):
     original_text = callback_query.message.text or ""
     try:
         await callback_query.message.edit_text(
-            original_text + "\n\n✅ <b>Approved</b> by admin.",
+            original_text + "\n\n✅ <b>Approved</b> — +15 videos granted.",
             parse_mode=enums.ParseMode.HTML,
             reply_markup=None,
         )
     except Exception:
         pass
-    await callback_query.answer("✅ User approved and notified.")
+    await callback_query.answer("✅ User approved — +15 videos granted.")
 
 
 # ─── Admin: decline ───────────────────────────────────────────────────────────
@@ -203,9 +230,9 @@ async def admin_decline(client, callback_query):
             chat_id=user_id,
             text=(
                 "❌ <b>Request Declined</b>\n\n"
-                "It looks like you haven't joined the channel yet.\n"
-                "Please join first, then use /video and confirm again.\n\n"
-                f"🔗 {JOIN_CHANNEL_LINK}"
+                "It seems you haven't joined the VIP Channel yet.\n"
+                "Please join first, then use /video and tap <b>Confirmed</b> again.\n\n"
+                f"🔗 {VIP_CHANNEL_LINK}"
             ),
             parse_mode=enums.ParseMode.HTML,
         )
@@ -235,7 +262,6 @@ async def my_status(client, callback_query):
         await callback_query.answer("No profile found. Send /start first.", show_alert=True)
         return
 
-    # Total videos watched (all time, from history collection)
     total_watched = await user_video_history.count_documents({"user_id": user_id})
 
     joined_at = user.get("joined_at")

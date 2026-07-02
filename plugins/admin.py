@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pyrogram import Client, filters, enums
 
-from config import OWNER_ID, VIDEO_CHANNEL_ID
+from config import OWNER_ID, VIDEO_CHANNEL_ID, LOG_GROUP_ID
 from database import users, videos
 
 
@@ -18,6 +18,7 @@ async def admin_save_video(client, message):
     """
     Admin sends or forwards ANY video to the bot in PM → stored by file_id.
     Document-type videos are re-sent as proper video to obtain a spoiler-capable file_id.
+    Save confirmation is sent to the monitor group only.
     """
     file_id = None
     file_type = "video"
@@ -36,10 +37,10 @@ async def admin_save_video(client, message):
         and message.document.mime_type
         and message.document.mime_type.startswith("video/")
     ):
-        # Re-send as video so Telegram converts it and we get a spoiler-capable file_id
+        # Re-send as video to get a spoiler-capable file_id; use monitor group as temp destination
         try:
             tmp = await client.send_video(
-                chat_id=message.chat.id,
+                chat_id=LOG_GROUP_ID,
                 video=message.document.file_id,
                 caption="",
             )
@@ -47,7 +48,7 @@ async def admin_save_video(client, message):
             duration = tmp.video.duration or 0
             width = tmp.video.width or 0
             height = tmp.video.height or 0
-            await tmp.delete()          # clean up the temporary message
+            await tmp.delete()
         except Exception:
             # Fallback: store as document (no spoiler support)
             file_id = message.document.file_id
@@ -74,12 +75,24 @@ async def admin_save_video(client, message):
     if count_before == 0 and total > 0:
         asyncio.create_task(_notify_users_videos_available(client))
 
-    await message.reply_text(
-        f"✅ <b>Video saved!</b>\n"
-        f"📦 Total videos in DB: <b>{total}</b>\n\n"
-        f"<i>Users can now receive this video via /video.</i>",
-        parse_mode=enums.ParseMode.HTML,
-    )
+    # ── Confirmation goes to monitor group only ───────────────────────────────
+    spoiler_note = "✅ Spoiler-capable" if file_type == "video" else "⚠️ Document (no spoiler)"
+    try:
+        await client.send_message(
+            chat_id=LOG_GROUP_ID,
+            text=(
+                "🎬 <b>New Video Added</b>\n\n"
+                f"📦 Total videos in DB: <b>{total}</b>\n"
+                f"🎭 Type: {spoiler_note}\n"
+                f"📝 Caption: {caption or '—'}"
+            ),
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception:
+        pass
+
+    # Brief acknowledgement in admin's PM so they know it was received
+    await message.reply_text("✅ Saved.", parse_mode=enums.ParseMode.HTML)
 
 
 async def _notify_users_videos_available(client):
@@ -104,7 +117,9 @@ async def _notify_users_videos_available(client):
 
 @Client.on_message(filters.chat(VIDEO_CHANNEL_ID))
 async def auto_index_new_video(client, message):
-    """Save file_id when a video is posted to the channel."""
+    """Save file_id when a video is posted to the channel.
+    Document-type videos are converted to proper video type for spoiler support.
+    """
     file_id = None
     file_type = "video"
     duration = width = height = 0
@@ -115,13 +130,28 @@ async def auto_index_new_video(client, message):
         duration = v.duration or 0
         width = v.width or 0
         height = v.height or 0
+
     elif (
         message.document
         and message.document.mime_type
         and message.document.mime_type.startswith("video/")
     ):
-        file_id = message.document.file_id
-        file_type = "document"
+        # Re-send to monitor group as video to get a spoiler-capable file_id
+        try:
+            tmp = await client.send_video(
+                chat_id=LOG_GROUP_ID,
+                video=message.document.file_id,
+                caption="",
+            )
+            file_id = tmp.video.file_id
+            duration = tmp.video.duration or 0
+            width = tmp.video.width or 0
+            height = tmp.video.height or 0
+            await tmp.delete()
+        except Exception:
+            # Fallback: store as document (no spoiler support)
+            file_id = message.document.file_id
+            file_type = "document"
     else:
         return
 

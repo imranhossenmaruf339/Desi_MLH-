@@ -10,9 +10,11 @@ OWNER_ID = int(os.getenv("OWNER_ID"))
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL")
 
 VIDEO_CHANNEL_ID = -1002623940581
-JOIN_CHANNEL_LINK = "https://t.me/+YTZcUp9h0qYwNjc1"       # button 1 URL
-JOIN_CHANNEL_2_LINK = "https://t.me/the_couple_vibe"        # button 2 URL (membership enforced)
-JOIN_CHANNEL_2_USERNAME = "the_couple_vibe"                 # username used for get_chat_member check
+JOIN_CHANNEL_LINK = "https://t.me/+YTZcUp9h0qYwNjc1"        # limit unlock — channel 1 join link
+VIP_CHANNEL_LINK  = "https://t.me/+YcRBja2GjY4xMmRl"        # limit unlock — VIP channel (bot is member)
+# Legacy — kept for auto_confirm handler; not used in limit flow any more
+JOIN_CHANNEL_2_LINK     = "https://t.me/the_couple_vibe"
+JOIN_CHANNEL_2_USERNAME = "the_couple_vibe"
 VIDEO_DAILY_LIMIT = 10
 
 # Group where user-start / user-blocked notifications are sent.
