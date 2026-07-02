@@ -1,12 +1,36 @@
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pyrogram import Client, filters, enums
+from pyrogram.errors import UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import OWNER_ID, VIDEO_CHANNEL_ID, JOIN_CHANNEL_LINK, VIDEO_DAILY_LIMIT
-from database import users, videos
+from config import OWNER_ID, JOIN_CHANNEL_LINK, JOIN_CHANNEL_2_LINK, JOIN_CHANNEL_2_USERNAME, VIDEO_DAILY_LIMIT
+from database import users, videos, user_video_history
 from helpers import get_current_window_start
+
+
+# Two JOIN buttons shown under every video
+JOIN_BUTTONS = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("JOIN", url=JOIN_CHANNEL_LINK),
+        InlineKeyboardButton("JOIN", url=JOIN_CHANNEL_2_LINK),
+    ]
+])
+
+
+async def check_second_channel(client, user_id: int) -> bool:
+    """Returns True if the user is a member of the required channel."""
+    try:
+        member = await client.get_chat_member(JOIN_CHANNEL_2_USERNAME, user_id)
+        return member.status not in [
+            enums.ChatMemberStatus.BANNED,
+            enums.ChatMemberStatus.LEFT,
+        ]
+    except UserNotParticipant:
+        return False
+    except Exception:
+        return False
 
 
 @Client.on_message(filters.command("video") & filters.private)
@@ -27,7 +51,17 @@ async def video_cmd(client, message):
         })
         user = await users.find_one({"user_id": user_id})
 
-    # Check / reset 12-hour window
+    # ── Channel membership check ──────────────────────────────────────────────
+    if not await check_second_channel(client, user_id):
+        await message.reply_text(
+            "⚠️ <b>You must join our channel to use this feature!</b>\n\n"
+            "👇 Tap <b>JOIN</b> below, join the channel, then send /video again.",
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=JOIN_BUTTONS,
+        )
+        return
+
+    # ── 12-hour window check / reset ──────────────────────────────────────────
     current_window = get_current_window_start()
     user_window = user.get("video_window_start")
     video_count = user.get("video_count", 0)
@@ -39,7 +73,7 @@ async def video_cmd(client, message):
             {"$set": {"video_count": 0, "video_window_start": current_window}},
         )
 
-    # Limit reached → show join prompt
+    # ── Daily limit reached ───────────────────────────────────────────────────
     if video_count >= VIDEO_DAILY_LIMIT:
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 Join Channel", url=JOIN_CHANNEL_LINK)],
@@ -56,21 +90,33 @@ async def video_cmd(client, message):
         )
         return
 
-    # Fetch video list from DB
-    video_list = await videos.find().to_list(length=500)
-    if not video_list:
+    # ── Pick a video not seen by this user in the last 7 days ────────────────
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    recent = await user_video_history.find(
+        {"user_id": user_id, "sent_at": {"$gte": seven_days_ago}},
+        {"video_id": 1},
+    ).to_list(length=None)
+    seen_ids = {h["video_id"] for h in recent}
+
+    all_vids = await videos.find().to_list(length=500)
+    pool = [v for v in all_vids if v["_id"] not in seen_ids]
+
+    # If everything has been seen recently, fall back to the full pool
+    if not pool:
+        pool = all_vids
+
+    if not pool:
         await message.reply_text(
-            "❌ <b>No videos available yet.</b>\n\n"
-            "Please check back later!",
+            "❌ <b>No videos available yet.</b>\n\nPlease check back later!",
             parse_mode=enums.ParseMode.HTML,
         )
         return
 
-    # Pick a random video and send using stored file_id (no channel access needed)
-    video_doc = random.choice(video_list)
+    video_doc = random.choice(pool)
     file_id = video_doc.get("file_id")
     file_type = video_doc.get("file_type", "video")
 
+    # ── Send the video ────────────────────────────────────────────────────────
     try:
         if file_type == "video":
             await client.send_video(
@@ -81,32 +127,28 @@ async def video_cmd(client, message):
                 duration=video_doc.get("duration", 0),
                 width=video_doc.get("width", 0),
                 height=video_doc.get("height", 0),
+                reply_markup=JOIN_BUTTONS,
             )
         else:
-            # Document-type video (sent without compression)
+            # Document-type video (sent without re-encoding)
             await client.send_document(
                 chat_id=message.chat.id,
                 document=file_id,
                 caption=video_doc.get("caption", ""),
+                reply_markup=JOIN_BUTTONS,
             )
 
-        new_count = video_count + 1
+        # Record history so this video is skipped for 7 days
+        await user_video_history.insert_one({
+            "user_id": user_id,
+            "video_id": video_doc["_id"],
+            "sent_at": datetime.utcnow(),
+        })
+
+        # Increment the 12-hour counter
         await users.update_one(
             {"user_id": user_id},
-            {"$set": {"video_count": new_count}},
-        )
-
-        remaining = VIDEO_DAILY_LIMIT - new_count
-        period_text = (
-            "🕛 Resets at 12:00 PM UTC"
-            if datetime.utcnow().hour < 12
-            else "🕛 Resets at 12:00 AM UTC"
-        )
-        await message.reply_text(
-            f"🎬 Enjoy!\n"
-            f"📊 <b>{remaining}</b> video(s) remaining this period.\n"
-            f"{period_text}",
-            parse_mode=enums.ParseMode.HTML,
+            {"$set": {"video_count": video_count + 1}},
         )
 
     except Exception as e:

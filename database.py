@@ -11,3 +11,26 @@ videos = db.videos
 premium = db.premium
 logs = db.logs
 video_requests = db.video_requests
+user_video_history = db.user_video_history   # tracks which videos each user has seen (7-day cooldown)
+
+
+async def ensure_indexes():
+    """Create indexes required for correct and efficient operation."""
+    # Fast lookup of recent history per user (used on every /video call)
+    await user_video_history.create_index(
+        [("user_id", 1), ("sent_at", -1)],
+        name="user_history_lookup",
+    )
+    # Compound index to quickly check if a specific video was sent to a user
+    await user_video_history.create_index(
+        [("user_id", 1), ("video_id", 1), ("sent_at", -1)],
+        name="user_video_sent",
+    )
+    # TTL index: automatically expire history documents after 7 days
+    await user_video_history.create_index(
+        [("sent_at", 1)],
+        expireAfterSeconds=7 * 24 * 3600,
+        name="history_ttl",
+    )
+    # Users lookup by user_id
+    await users.create_index([("user_id", 1)], unique=True, name="users_uid")

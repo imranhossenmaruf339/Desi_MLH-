@@ -18,7 +18,6 @@ async def admin_save_video(client, message):
     """
     Admin sends or forwards ANY video to the bot in PM → stored by file_id.
     Works with direct uploads and channel forwards.
-    Use /delvideo <id> to remove. Use /stats to see totals.
     """
     file_id = None
     file_type = "video"
@@ -39,7 +38,6 @@ async def admin_save_video(client, message):
         file_id = message.document.file_id
         file_type = "document"
     else:
-        # Not a usable video — ignore silently
         return
 
     await videos.insert_one({
@@ -169,17 +167,28 @@ async def broadcast_cmd(client, message):
         parse_mode=enums.ParseMode.HTML,
     )
 
+    # Detect whether the source message has inline buttons.
+    # copy_message strips reply_markup; forward_messages preserves it.
+    has_buttons = bool(message.reply_to_message.reply_markup)
+
     success = 0
     failed = 0
 
     for user_doc in all_users:
         uid = user_doc["user_id"]
         try:
-            await client.copy_message(
-                chat_id=uid,
-                from_chat_id=message.chat.id,
-                message_id=message.reply_to_message.id,
-            )
+            if has_buttons:
+                await client.forward_messages(
+                    chat_id=uid,
+                    from_chat_id=message.chat.id,
+                    message_ids=message.reply_to_message.id,
+                )
+            else:
+                await client.copy_message(
+                    chat_id=uid,
+                    from_chat_id=message.chat.id,
+                    message_id=message.reply_to_message.id,
+                )
             success += 1
         except Exception:
             failed += 1
