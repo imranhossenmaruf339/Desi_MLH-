@@ -225,6 +225,109 @@ async def fix_videos_cmd(client, message):
     )
 
 
+# ─── /users — list all registered users (monitor group or owner PM) ──────────
+
+@Client.on_message(filters.command("users") & (filters.user(OWNER_ID) | filters.chat(LOG_GROUP_ID)))
+async def users_cmd(client, message):
+    all_users = await users.find({}, {"user_id": 1, "username": 1, "first_name": 1}).to_list(length=None)
+    if not all_users:
+        await message.reply_text("No users registered yet.", parse_mode=enums.ParseMode.HTML)
+        return
+
+    lines = [f"👥 <b>All Users ({len(all_users)})</b>\n"]
+    for u in all_users:
+        name = u.get("first_name") or "—"
+        uname = f"@{u['username']}" if u.get("username") else "no username"
+        uid = u["user_id"]
+        lines.append(f"• {name} | {uname} | <code>{uid}</code>")
+
+    # Split into chunks of 50 to avoid message length limit
+    chunk_size = 50
+    for i in range(0, len(lines), chunk_size):
+        chunk = lines[i:i + chunk_size] if i > 0 else lines[:chunk_size]
+        await message.reply_text("\n".join(chunk), parse_mode=enums.ParseMode.HTML)
+
+
+# ─── /groups — list all groups the bot is in ─────────────────────────────────
+
+@Client.on_message(filters.command("groups") & (filters.user(OWNER_ID) | filters.chat(LOG_GROUP_ID)))
+async def groups_cmd(client, message):
+    all_groups = await groups.find({}, {"group_id": 1, "title": 1}).to_list(length=None)
+    if not all_groups:
+        await message.reply_text(
+            "No groups in database yet.\n"
+            "Use /updategroup inside any group to register it.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    lines = [f"🏘 <b>Groups ({len(all_groups)})</b>\n"]
+    for g in all_groups:
+        title = g.get("title") or "Unknown"
+        gid = g["group_id"]
+        lines.append(f"• {title} | <code>{gid}</code>")
+
+    await message.reply_text("\n".join(lines), parse_mode=enums.ParseMode.HTML)
+
+
+# ─── /updategroup — register current group (or group by ID) in DB ─────────────
+
+@Client.on_message(filters.command("updategroup") & filters.user(OWNER_ID))
+async def updategroup_cmd(client, message):
+    # If run inside a group → register that group
+    if message.chat.type in ("group", "supergroup"):
+        gid = message.chat.id
+        title = message.chat.title or "Unknown"
+        await groups.update_one(
+            {"group_id": gid},
+            {"$set": {"group_id": gid, "title": title, "updated_at": datetime.utcnow()}},
+            upsert=True,
+        )
+        await message.reply_text(
+            f"✅ Group registered!\n"
+            f"📌 <b>{title}</b>\n"
+            f"🆔 <code>{gid}</code>",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    # If run in PM/monitor group with an ID argument → register that ID
+    if len(message.command) >= 2:
+        try:
+            gid = int(message.command[1])
+        except ValueError:
+            await message.reply_text(
+                "❌ Usage: send <code>/updategroup</code> <b>inside the group</b>, "
+                "or <code>/updategroup -100XXXXXXXXX</code> here.",
+                parse_mode=enums.ParseMode.HTML,
+            )
+            return
+        try:
+            chat = await client.get_chat(gid)
+            title = chat.title or "Unknown"
+        except Exception:
+            title = f"Group {gid}"
+        await groups.update_one(
+            {"group_id": gid},
+            {"$set": {"group_id": gid, "title": title, "updated_at": datetime.utcnow()}},
+            upsert=True,
+        )
+        await message.reply_text(
+            f"✅ Group registered!\n"
+            f"📌 <b>{title}</b>\n"
+            f"🆔 <code>{gid}</code>",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    await message.reply_text(
+        "ℹ️ <b>How to use /updategroup:</b>\n\n"
+        "1️⃣ Send <code>/updategroup</code> <b>inside the group</b> to register it.\n"
+        "2️⃣ Or use <code>/updategroup -100XXXXXXXXX</code> here with the group ID.",
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+
 # ─── /delvideo <index> — remove a video by its position number ───────────────
 
 @Client.on_message(filters.command("delvideo") & filters.user(OWNER_ID))

@@ -6,7 +6,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT
-from database import users, videos, user_video_history
+from database import users, videos, user_video_history, groups
 from helpers import get_current_window_start, schedule_delete
 
 
@@ -128,40 +128,70 @@ async def video_cmd(client, message):
             asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 30))
         return
 
+    # ── Auto-register group so broadcast reaches it ───────────────────────────
+    if in_group:
+        from datetime import datetime as _dt
+        await groups.update_one(
+            {"group_id": message.chat.id},
+            {"$set": {"group_id": message.chat.id, "title": message.chat.title or ""}},
+            upsert=True,
+        )
+
     video_doc = random.choice(pool)
     file_id = video_doc.get("file_id")
+    file_type = video_doc.get("file_type", "video")
 
     # ── Send the video with spoiler ───────────────────────────────────────────
-    # Always try send_video first → has_spoiler works only for video type.
-    # If the stored file_id is document-only, fall back to send_document (no spoiler).
     sent = None
-    try:
-        sent = await client.send_video(
-            chat_id=message.chat.id,
-            video=file_id,
-            caption=video_doc.get("caption", ""),
-            has_spoiler=True,
-            duration=video_doc.get("duration", 0),
-            width=video_doc.get("width", 0),
-            height=video_doc.get("height", 0),
-            reply_markup=_join_buttons(),
-        )
-    except Exception:
+    spoiler_err = None
+
+    if file_type == "video":
         try:
-            sent = await client.send_document(
+            sent = await client.send_video(
                 chat_id=message.chat.id,
-                document=file_id,
+                video=file_id,
                 caption=video_doc.get("caption", ""),
+                has_spoiler=True,
+                supports_streaming=True,
+                duration=video_doc.get("duration", 0),
+                width=video_doc.get("width", 0),
+                height=video_doc.get("height", 0),
                 reply_markup=_join_buttons(),
             )
         except Exception as e:
-            err = await message.reply_text(
-                f"❌ Failed to send video. Please try again.\n<code>{e}</code>",
-                parse_mode=enums.ParseMode.HTML,
+            spoiler_err = str(e)
+
+    if sent is None:
+        # file_type is document, or send_video failed — try without spoiler
+        try:
+            if file_type == "video" and spoiler_err is None:
+                raise ValueError("Already tried send_video above")
+            sent = await client.send_video(
+                chat_id=message.chat.id,
+                video=file_id,
+                caption=video_doc.get("caption", ""),
+                supports_streaming=True,
+                duration=video_doc.get("duration", 0),
+                width=video_doc.get("width", 0),
+                height=video_doc.get("height", 0),
+                reply_markup=_join_buttons(),
             )
-            if in_group and err:
-                asyncio.create_task(schedule_delete(client, message.chat.id, err.id, 30))
-            return
+        except Exception:
+            try:
+                sent = await client.send_document(
+                    chat_id=message.chat.id,
+                    document=file_id,
+                    caption=video_doc.get("caption", ""),
+                    reply_markup=_join_buttons(),
+                )
+            except Exception as e:
+                err = await message.reply_text(
+                    f"❌ Failed to send video. Please try again.\n<code>{e}</code>",
+                    parse_mode=enums.ParseMode.HTML,
+                )
+                if in_group and err:
+                    asyncio.create_task(schedule_delete(client, message.chat.id, err.id, 30))
+                return
 
     # ── Schedule auto-delete after 30 minutes ────────────────────────────────
     if sent:
@@ -177,19 +207,3 @@ async def video_cmd(client, message):
         {"user_id": user_id},
         {"$set": {"video_count": video_count + 1}},
     )
-
-    # Check if this was the last unseen video — notify user
-    remaining_pool = [v for v in all_vids if v["_id"] not in seen_ids and v["_id"] != video_doc["_id"]]
-    if not remaining_pool:
-        try:
-            note = await message.reply_text(
-                "🎬 <b>That was your last unseen video!</b>\n\n"
-                "You've now watched everything available. "
-                "New videos will be added soon — you'll get a notification! 🔔\n\n"
-                "Watched videos also refresh after <b>7 days</b>.",
-                parse_mode=enums.ParseMode.HTML,
-            )
-            if in_group and note:
-                asyncio.create_task(schedule_delete(client, message.chat.id, note.id, 30))
-        except Exception:
-            pass
