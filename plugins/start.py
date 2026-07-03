@@ -6,6 +6,7 @@ from pyrogram import Client, filters, enums
 from config import LOG_GROUP_ID
 from database import users
 from helpers import get_current_window_start, schedule_delete
+from plugins.video import deliver_video
 
 
 def _make_welcome_keyboard(bot_username: str):
@@ -82,6 +83,29 @@ async def start(client, message):
         status_label = "🆕 New user"
     else:
         status_label = "🔁 Returning user"
+
+    # ── Deep-link: /start video — sent from group "ভিডিও দেখুন" button ────────
+    args = message.text.split(None, 1)
+    deep_link = args[1].strip() if len(args) > 1 else ""
+
+    if deep_link == "video" and not in_group:
+        # Register / log the user first (already done above), then deliver video
+        try:
+            await client.send_message(
+                chat_id=LOG_GROUP_ID,
+                text=(
+                    f"👤 <b>User Started Bot</b>\n\n"
+                    f"📛 Name: {user.first_name or ''} {user.last_name or ''}\n"
+                    f"🔖 Username: {username}\n"
+                    f"🆔 ID: <code>{user_id}</code>\n"
+                    f"📌 Status: {status_label} (via group button)"
+                ),
+                parse_mode=enums.ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        await deliver_video(client, user_id, message.chat.id)
+        return
 
     # Notify the log group every time someone starts the bot
     try:

@@ -5,23 +5,35 @@ from datetime import datetime, timedelta
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT
+from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, OWNER_ID
 from database import users, videos, user_video_history, groups
 from helpers import get_current_window_start, schedule_delete
 
 
-# Two JOIN buttons shown under every video (always visible)
+# ─── Shared button builders ───────────────────────────────────────────────────
+
 def _join_buttons():
+    """Two channel join buttons shown under every video."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("JOIN", url=JOIN_CHANNEL_LINK),
             InlineKeyboardButton("JOIN", url=VIP_CHANNEL_LINK),
-        ]
+        ],
+        [InlineKeyboardButton("🎬 আরেকটি ভিডিও পান", callback_data="next_video")],
+    ])
+
+
+def _group_prompt_buttons(bot_username: str):
+    """Button shown in groups — deep-links user to bot PM to get video."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "🎬 ভিডিও দেখুন",
+            url=f"https://t.me/{bot_username}?start=video",
+        )],
     ])
 
 
 async def _delete_after(client, chat_id: int, message_id: int, delay: int = 1800):
-    """Delete a message after `delay` seconds (default 30 minutes)."""
     await asyncio.sleep(delay)
     try:
         await client.delete_messages(chat_id, message_id)
@@ -29,25 +41,24 @@ async def _delete_after(client, chat_id: int, message_id: int, delay: int = 1800
         pass
 
 
-# Works in private chats AND in any group where the bot is a member
-@Client.on_message(filters.command("video") & (filters.private | filters.group))
-async def video_cmd(client, message):
-    # Anonymous group admins have no from_user
-    if not message.from_user:
-        await message.reply_text("❌ Cannot identify user. Please disable anonymous mode.")
-        return
+# ─── Core video-delivery logic (called from PM handler AND /start deeplink) ──
 
-    user_id = message.from_user.id
-    in_group = message.chat.type != enums.ChatType.PRIVATE
+async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
+    """
+    Fetch an unseen video for user_id and send it to chat_id.
+    Returns (success: bool, error_msg: str | None).
+    Skips the daily limit entirely for OWNER_ID.
+    """
+    is_admin = (user_id == OWNER_ID)
 
-    # ── Ensure user record exists ─────────────────────────────────────────────
+    # ── Ensure user record ───────────────────────────────────────────────────
     user = await users.find_one({"user_id": user_id})
     if not user:
         window = get_current_window_start()
         await users.insert_one({
             "user_id": user_id,
-            "username": message.from_user.username,
-            "first_name": message.from_user.first_name or "",
+            "username": None,
+            "first_name": "",
             "points": 0,
             "referrals": 0,
             "video_count": 0,
@@ -56,7 +67,7 @@ async def video_cmd(client, message):
         })
         user = await users.find_one({"user_id": user_id})
 
-    # ── 12-hour window check / reset ──────────────────────────────────────────
+    # ── 12-hour window reset ─────────────────────────────────────────────────
     current_window = get_current_window_start()
     user_window = user.get("video_window_start")
     video_count = user.get("video_count", 0)
@@ -68,35 +79,33 @@ async def video_cmd(client, message):
             {"$set": {"video_count": 0, "video_window_start": current_window}},
         )
 
-    # ── Daily limit reached → show unlock options ────────────────────────────
-    if video_count >= VIDEO_DAILY_LIMIT:
+    # ── Daily limit (admin always bypasses) ──────────────────────────────────
+    if not is_admin and video_count >= VIDEO_DAILY_LIMIT:
         keyboard = InlineKeyboardMarkup([
-            # Row 1 — both join buttons side by side
             [
                 InlineKeyboardButton("📢 Channel 1", url=JOIN_CHANNEL_LINK),
                 InlineKeyboardButton("💎 VIP Channel", url=VIP_CHANNEL_LINK),
             ],
-            # Row 2 — single confirm button
             [InlineKeyboardButton("✅ Confirmed — Unlock +15 Videos", callback_data=f"confirm_join:{user_id}")],
         ])
-        sent = await message.reply_text(
-            "🔥 <b>Daily Limit Reached!</b>\n"
-            "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n"
-            "⏰ Come back after <b>12:00</b> for a free reset.\n\n"
-            "💡 <b>Want more right now?</b>\n"
-            "Join our channels and unlock <b>+15 bonus videos</b> instantly!\n\n"
-            "🎬 <i>Our VIP Channel drops exclusive, never-seen content daily — "
-            "hot videos, behind-the-scenes, and members-only drops you won't find anywhere else.</i>\n\n"
-            "👇 <b>Join both channels below, then tap Confirmed:</b>",
+        await client.send_message(
+            chat_id=chat_id,
+            text=(
+                "🔥 <b>Daily Limit Reached!</b>\n"
+                "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n"
+                "⏰ Come back after <b>12:00</b> for a free reset.\n\n"
+                "💡 <b>Want more right now?</b>\n"
+                "Join our channels and unlock <b>+15 bonus videos</b> instantly!\n\n"
+                "🎬 <i>Our VIP Channel drops exclusive, never-seen content daily — "
+                "hot videos, behind-the-scenes, and members-only drops you won't find anywhere else.</i>\n\n"
+                "👇 <b>Join both channels below, then tap Confirmed:</b>"
+            ),
             parse_mode=enums.ParseMode.HTML,
             reply_markup=keyboard,
         )
-        # Delete limit message in groups after 90 s (user needs time to tap the button)
-        if in_group and sent:
-            asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 90))
-        return
+        return False, "limit"
 
-    # ── Pick a video not seen by this user in the last 7 days ────────────────
+    # ── Pick unseen video ────────────────────────────────────────────────────
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
     recent = await user_video_history.find(
         {"user_id": user_id, "sent_at": {"$gte": seven_days_ago}},
@@ -107,50 +116,50 @@ async def video_cmd(client, message):
     all_vids = await videos.find().to_list(length=None)
     pool = [v for v in all_vids if v["_id"] not in seen_ids]
 
-    # All videos watched — notify user, do NOT fall back to re-sending seen ones
     if not pool and all_vids:
-        sent = await message.reply_text(
-            "🎬 <b>You've watched all available videos!</b>\n\n"
-            "New videos will be added soon. You'll be notified when they arrive! 🔔\n\n"
-            "Come back in a few days — watched videos also refresh after <b>7 days</b>.",
+        await client.send_message(
+            chat_id=chat_id,
+            text=(
+                "🎬 <b>You've watched all available videos!</b>\n\n"
+                "New videos will be added soon. You'll be notified when they arrive! 🔔\n\n"
+                "Come back in a few days — watched videos also refresh after <b>7 days</b>."
+            ),
             parse_mode=enums.ParseMode.HTML,
         )
-        if in_group and sent:
-            asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 30))
-        return
+        return False, "no_pool"
 
     if not pool:
-        sent = await message.reply_text(
-            "❌ <b>No videos available yet.</b>\n\nPlease check back later!",
+        await client.send_message(
+            chat_id=chat_id,
+            text="❌ <b>No videos available yet.</b>\n\nPlease check back later!",
             parse_mode=enums.ParseMode.HTML,
         )
-        if in_group and sent:
-            asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 30))
-        return
-
-    # ── Auto-register group so broadcast reaches it ───────────────────────────
-    if in_group:
-        from datetime import datetime as _dt
-        await groups.update_one(
-            {"group_id": message.chat.id},
-            {"$set": {"group_id": message.chat.id, "title": message.chat.title or ""}},
-            upsert=True,
-        )
+        return False, "empty"
 
     video_doc = random.choice(pool)
     file_id = video_doc.get("file_id")
     file_type = video_doc.get("file_type", "video")
 
-    # ── Send the video with spoiler ───────────────────────────────────────────
+    # ── Remaining count hint (not shown to admin — they have no limit) ───────
+    remaining = (VIDEO_DAILY_LIMIT - video_count - 1) if not is_admin else None
+    remaining_text = (
+        f"\n\n📹 <i>আপনার কাছে এই উইন্ডোতে আরও <b>{remaining}</b>টি ভিডিও বাকি আছে।</i>"
+        if remaining is not None and remaining >= 0
+        else ""
+    )
+
+    caption = (video_doc.get("caption", "") or "") + remaining_text
+
+    # ── Send video ───────────────────────────────────────────────────────────
     sent = None
     spoiler_err = None
 
     if file_type == "video":
         try:
             sent = await client.send_video(
-                chat_id=message.chat.id,
+                chat_id=chat_id,
                 video=file_id,
-                caption=video_doc.get("caption", ""),
+                caption=caption,
                 has_spoiler=True,
                 supports_streaming=True,
                 duration=video_doc.get("duration", 0),
@@ -162,14 +171,11 @@ async def video_cmd(client, message):
             spoiler_err = str(e)
 
     if sent is None:
-        # file_type is document, or send_video failed — try without spoiler
         try:
-            if file_type == "video" and spoiler_err is None:
-                raise ValueError("Already tried send_video above")
             sent = await client.send_video(
-                chat_id=message.chat.id,
+                chat_id=chat_id,
                 video=file_id,
-                caption=video_doc.get("caption", ""),
+                caption=caption,
                 supports_streaming=True,
                 duration=video_doc.get("duration", 0),
                 width=video_doc.get("width", 0),
@@ -179,31 +185,96 @@ async def video_cmd(client, message):
         except Exception:
             try:
                 sent = await client.send_document(
-                    chat_id=message.chat.id,
+                    chat_id=chat_id,
                     document=file_id,
-                    caption=video_doc.get("caption", ""),
+                    caption=caption,
                     reply_markup=_join_buttons(),
                 )
             except Exception as e:
-                err = await message.reply_text(
-                    f"❌ Failed to send video. Please try again.\n<code>{e}</code>",
+                await client.send_message(
+                    chat_id=chat_id,
+                    text=f"❌ Failed to send video. Please try again.\n<code>{e}</code>",
                     parse_mode=enums.ParseMode.HTML,
                 )
-                if in_group and err:
-                    asyncio.create_task(schedule_delete(client, message.chat.id, err.id, 30))
-                return
+                return False, str(e)
 
-    # ── Schedule auto-delete after 30 minutes ────────────────────────────────
+    # ── Auto-delete after 30 minutes ─────────────────────────────────────────
     if sent:
-        asyncio.create_task(_delete_after(client, message.chat.id, sent.id, delay=1800))
+        asyncio.create_task(_delete_after(client, chat_id, sent.id, delay=1800))
 
-    # ── Record history + increment counter ───────────────────────────────────
+    # ── Record history + increment counter (admin counter also tracked) ───────
     await user_video_history.insert_one({
         "user_id": user_id,
         "video_id": video_doc["_id"],
         "sent_at": datetime.utcnow(),
     })
-    await users.update_one(
-        {"user_id": user_id},
-        {"$set": {"video_count": video_count + 1}},
-    )
+    if not is_admin:
+        await users.update_one(
+            {"user_id": user_id},
+            {"$set": {"video_count": video_count + 1}},
+        )
+
+    return True, None
+
+
+# ─── /video command handler ───────────────────────────────────────────────────
+
+@Client.on_message(filters.command("video") & (filters.private | filters.group))
+async def video_cmd(client, message):
+    if not message.from_user:
+        await message.reply_text("❌ Cannot identify user. Please disable anonymous mode.")
+        return
+
+    user_id = message.from_user.id
+    in_group = message.chat.type != enums.ChatType.PRIVATE
+
+    # ── Auto-register group ───────────────────────────────────────────────────
+    if in_group:
+        await groups.update_one(
+            {"group_id": message.chat.id},
+            {"$set": {"group_id": message.chat.id, "title": message.chat.title or ""}},
+            upsert=True,
+        )
+
+    # ── In a group: never send video directly — show Bangla prompt + button ──
+    if in_group:
+        import bot_info
+        bot_username = bot_info.BOT_USERNAME or "this_bot"
+
+        sent = await message.reply_text(
+            "🎬 <b>ভিডিও দেখতে নিচের বাটনে ক্লিক করুন</b>\n\n"
+            "বাটনে ক্লিক করলে বট আপনাকে সরাসরি প্রাইভেট মেসেজে ভিডিও পাঠাবে। 🔒",
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=_group_prompt_buttons(bot_username),
+        )
+        # Auto-delete group prompt after 60 seconds
+        asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 60))
+        # Also delete the user's /video command message
+        asyncio.create_task(schedule_delete(client, message.chat.id, message.id, 5))
+        return
+
+    # ── Private chat: deliver directly ───────────────────────────────────────
+    await deliver_video(client, user_id, message.chat.id, reply_to=message)
+
+
+# ─── "🎬 আরেকটি ভিডিও পান" inline button callback ───────────────────────────
+
+@Client.on_callback_query(filters.regex(r"^next_video$") & filters.private)
+async def next_video_callback(client, callback_query):
+    user_id = callback_query.from_user.id
+    chat_id = callback_query.message.chat.id
+
+    # Safety: only deliver in private chats — group button should never appear, but guard anyway
+    if callback_query.message.chat.type != enums.ChatType.PRIVATE:
+        import bot_info
+        bot_username = bot_info.BOT_USERNAME or "this_bot"
+        await callback_query.answer(
+            "ভিডিও শুধু প্রাইভেট চ্যাটে পাঠানো হয়। নিচের লিঙ্কে ক্লিক করুন।",
+            show_alert=True,
+        )
+        return
+
+    await callback_query.answer("⏳ পাঠাচ্ছি...")
+    success, reason = await deliver_video(client, user_id, chat_id)
+    if not success and reason not in ("limit", "no_pool", "empty"):
+        await callback_query.answer("❌ কিছু একটা সমস্যা হয়েছে। আবার চেষ্টা করুন।", show_alert=True)
