@@ -3,8 +3,9 @@ from datetime import datetime
 
 from pyrogram import Client, filters, enums
 
-from config import OWNER_ID, VIDEO_CHANNEL_ID, LOG_GROUP_ID
+from config import OWNER_ID, VIDEO_CHANNEL_ID, LOG_GROUP_ID, VIDEO_DAILY_LIMIT
 from database import users, videos, groups
+from helpers import get_current_window_start
 
 
 # ─── Admin sends/forwards any video to the bot PM → auto-save ────────────────
@@ -403,13 +404,11 @@ async def addlimit_cmd(client, message):
 
     old_count = user.get("video_count", 0)
     new_count = max(0, old_count - amount)          # can't go below 0
-    from helpers import get_current_window_start
     await users.update_one(
         {"user_id": target_id},
         {"$set": {"video_count": new_count, "video_window_start": get_current_window_start()}},
     )
 
-    from config import VIDEO_DAILY_LIMIT
     remaining_before = max(0, VIDEO_DAILY_LIMIT - old_count)
     remaining_after  = max(0, VIDEO_DAILY_LIMIT - new_count)
     name  = user.get("first_name") or "Unknown"

@@ -11,12 +11,12 @@ from helpers import get_current_window_start, schedule_delete
 
 
 async def _log(client, text: str):
-    """Fire-and-forget log to monitor group — never raises."""
+    """Send a log message to the monitor group — never raises."""
     try:
         await client.send_message(
             chat_id=LOG_GROUP_ID,
             text=text,
-            parse_mode="html",
+            parse_mode=enums.ParseMode.HTML,
         )
     except Exception:
         pass
@@ -98,7 +98,7 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
         now_str   = datetime.utcnow().strftime("%d %b %Y, %I:%M %p UTC")
 
         # Notify monitor group that this user just hit their limit
-        asyncio.create_task(_log(
+        await _log(
             client,
             f"🚫 <b>লিমিট শেষ হয়েছে!</b>\n\n"
             f"👤 Name: <b>{name}</b>\n"
@@ -106,7 +106,7 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
             f"🆔 ID: <code>{user_id}</code>\n"
             f"📊 Used: <b>{video_count}/{VIDEO_DAILY_LIMIT}</b> videos\n"
             f"🕐 Time: {now_str}",
-        ))
+        )
 
         keyboard = InlineKeyboardMarkup([
             [
@@ -254,7 +254,7 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
         remaining = max(0, VIDEO_DAILY_LIMIT - new_count)
         count_line = f"📊 Count: <b>{new_count}/{VIDEO_DAILY_LIMIT}</b> (remaining: {remaining})"
 
-    asyncio.create_task(_log(
+    await _log(
         client,
         f"🎬 <b>ভিডিও পাঠানো হয়েছে</b>\n\n"
         f"👤 Name: <b>{name}</b>\n"
@@ -263,7 +263,7 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
         f"{count_line}\n"
         f"🎞 Total ever watched: <b>{total_watched}</b>\n"
         f"🕐 Time: {now_str}",
-    ))
+    )
 
     return True, None
 

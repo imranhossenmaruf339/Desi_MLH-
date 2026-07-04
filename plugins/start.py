@@ -82,6 +82,14 @@ async def start(client, message):
         })
         status_label = "🆕 New user"
     else:
+        # Always keep name/username fresh so monitor-group logs are accurate
+        await users.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "username": user.username,
+                "first_name": user.first_name or "",
+            }},
+        )
         status_label = "🔁 Returning user"
 
     # ── Deep-link: /start video — sent from group "ভিডিও দেখুন" button ────────
