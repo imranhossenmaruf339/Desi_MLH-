@@ -5,9 +5,21 @@ from datetime import datetime, timedelta
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, OWNER_ID
+from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, OWNER_ID, LOG_GROUP_ID
 from database import users, videos, user_video_history, groups
 from helpers import get_current_window_start, schedule_delete
+
+
+async def _log(client, text: str):
+    """Fire-and-forget log to monitor group — never raises."""
+    try:
+        await client.send_message(
+            chat_id=LOG_GROUP_ID,
+            text=text,
+            parse_mode="html",
+        )
+    except Exception:
+        pass
 
 
 # ─── Shared button builders ───────────────────────────────────────────────────
@@ -81,6 +93,21 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
 
     # ── Daily limit (admin always bypasses) ──────────────────────────────────
     if not is_admin and video_count >= VIDEO_DAILY_LIMIT:
+        name      = user.get("first_name") or "Unknown"
+        uname     = f"@{user['username']}" if user.get("username") else "no username"
+        now_str   = datetime.utcnow().strftime("%d %b %Y, %I:%M %p UTC")
+
+        # Notify monitor group that this user just hit their limit
+        asyncio.create_task(_log(
+            client,
+            f"🚫 <b>লিমিট শেষ হয়েছে!</b>\n\n"
+            f"👤 Name: <b>{name}</b>\n"
+            f"🔖 Username: {uname}\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"📊 Used: <b>{video_count}/{VIDEO_DAILY_LIMIT}</b> videos\n"
+            f"🕐 Time: {now_str}",
+        ))
+
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("📢 Channel 1", url=JOIN_CHANNEL_LINK),
@@ -208,11 +235,35 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
         "video_id": video_doc["_id"],
         "sent_at": datetime.utcnow(),
     })
+    new_count = video_count + 1
     if not is_admin:
         await users.update_one(
             {"user_id": user_id},
-            {"$set": {"video_count": video_count + 1}},
+            {"$set": {"video_count": new_count}},
         )
+
+    # ── Log to monitor group ──────────────────────────────────────────────────
+    name    = user.get("first_name") or "Unknown"
+    uname   = f"@{user['username']}" if user.get("username") else "no username"
+    now_str = datetime.utcnow().strftime("%d %b %Y, %I:%M %p UTC")
+    total_watched = await user_video_history.count_documents({"user_id": user_id})
+
+    if is_admin:
+        count_line = "📊 Count: <b>Admin (no limit)</b>"
+    else:
+        remaining = max(0, VIDEO_DAILY_LIMIT - new_count)
+        count_line = f"📊 Count: <b>{new_count}/{VIDEO_DAILY_LIMIT}</b> (remaining: {remaining})"
+
+    asyncio.create_task(_log(
+        client,
+        f"🎬 <b>ভিডিও পাঠানো হয়েছে</b>\n\n"
+        f"👤 Name: <b>{name}</b>\n"
+        f"🔖 Username: {uname}\n"
+        f"🆔 ID: <code>{user_id}</code>\n"
+        f"{count_line}\n"
+        f"🎞 Total ever watched: <b>{total_watched}</b>\n"
+        f"🕐 Time: {now_str}",
+    ))
 
     return True, None
 

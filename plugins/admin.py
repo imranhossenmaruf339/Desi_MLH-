@@ -363,6 +363,94 @@ async def del_video_cmd(client, message):
     )
 
 
+# ─── /addlimit <user_id> <amount> — give a user extra videos ─────────────────
+
+@Client.on_message(filters.command("addlimit") & filters.user(OWNER_ID))
+async def addlimit_cmd(client, message):
+    """
+    /addlimit <user_id> <amount>
+    Decreases the user's video_count by <amount>, effectively giving them that
+    many extra videos in the current 12-hour window.
+    Owner-only — not opened to monitor group members.
+    """
+    if len(message.command) < 3:
+        await message.reply_text(
+            "❌ <b>Usage:</b> <code>/addlimit &lt;user_id&gt; &lt;amount&gt;</code>\n\n"
+            "<b>Example:</b> <code>/addlimit 123456789 5</code>  →  gives user 5 more videos",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    try:
+        target_id = int(message.command[1])
+        amount    = int(message.command[2])
+        if amount <= 0 or target_id <= 0:
+            raise ValueError
+    except ValueError:
+        await message.reply_text(
+            "❌ Both <code>user_id</code> and <code>amount</code> must be positive integers.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    user = await users.find_one({"user_id": target_id})
+    if not user:
+        await message.reply_text(
+            f"❌ No user found with ID <code>{target_id}</code>.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return
+
+    old_count = user.get("video_count", 0)
+    new_count = max(0, old_count - amount)          # can't go below 0
+    from helpers import get_current_window_start
+    await users.update_one(
+        {"user_id": target_id},
+        {"$set": {"video_count": new_count, "video_window_start": get_current_window_start()}},
+    )
+
+    from config import VIDEO_DAILY_LIMIT
+    remaining_before = max(0, VIDEO_DAILY_LIMIT - old_count)
+    remaining_after  = max(0, VIDEO_DAILY_LIMIT - new_count)
+    name  = user.get("first_name") or "Unknown"
+    uname = f"@{user['username']}" if user.get("username") else "no username"
+
+    confirmation = (
+        f"✅ <b>Limit Added</b>\n\n"
+        f"👤 {name} | {uname} | <code>{target_id}</code>\n"
+        f"➕ Added: <b>+{amount}</b> videos\n"
+        f"📊 Before: {remaining_before} remaining → After: <b>{remaining_after} remaining</b>\n"
+        f"🕐 {datetime.utcnow().strftime('%d %b %Y, %I:%M %p UTC')}"
+    )
+
+    # Notify monitor group (always, even if command came from there)
+    try:
+        await client.send_message(
+            chat_id=LOG_GROUP_ID,
+            text=f"🔓 <b>Admin Added Limit</b>\n\n{confirmation}",
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception:
+        pass
+
+    # Notify the user they got extra videos
+    try:
+        await client.send_message(
+            chat_id=target_id,
+            text=(
+                f"🎁 <b>আপনার লিমিট বাড়ানো হয়েছে!</b>\n\n"
+                f"অ্যাডমিন আপনাকে আরও <b>{amount}টি</b> ভিডিও দিয়েছেন। 🎬\n"
+                f"এখন আপনার কাছে আরও <b>{remaining_after}টি</b> ভিডিও বাকি আছে।\n\n"
+                f"উপভোগ করুন! /video"
+            ),
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception:
+        pass
+
+    await message.reply_text(confirmation, parse_mode=enums.ParseMode.HTML)
+
+
 # ─── /stats ───────────────────────────────────────────────────────────────────
 
 @Client.on_message(filters.command("stats") & filters.user(OWNER_ID))
