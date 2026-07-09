@@ -20,6 +20,8 @@ logs = db.logs
 video_requests = db.video_requests
 user_video_history = db.user_video_history   # tracks which videos each user has seen (7-day cooldown)
 groups = db.groups                           # groups the bot has been added to
+support_msgs = db.support_msgs               # user_id ↔ support group message mapping
+group_video_stats = db.group_video_stats     # per-user group video count per 12h window
 
 
 async def ensure_indexes():

@@ -78,6 +78,6 @@ async def on_new_chat_members(client, message):
                 reply_markup=keyboard,
             )
             if sent:
-                asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 30))
+                asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 60))
         except Exception:
             pass

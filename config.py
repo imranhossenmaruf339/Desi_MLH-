@@ -33,6 +33,8 @@ except (ValueError, TypeError):
 JOIN_CHANNEL_2_LINK     = os.getenv("JOIN_CHANNEL_2_LINK", "https://t.me/the_couple_vibe")
 JOIN_CHANNEL_2_USERNAME = os.getenv("JOIN_CHANNEL_2_USERNAME", "the_couple_vibe")
 VIDEO_DAILY_LIMIT = int(os.getenv("VIDEO_DAILY_LIMIT", "10"))
+GROUP_VIDEO_LIMIT = int(os.getenv("GROUP_VIDEO_LIMIT", "5"))   # গ্রুপে প্রতি ইউজার প্রতি 12 ঘন্টায় সর্বোচ্চ ভিডিও
+SUPPORT_GROUP_ID  = int(os.getenv("SUPPORT_GROUP_ID", "-1003876863435"))  # সাপোর্ট ইনবক্স গ্রুপ
 
 # ── Required variable validation ─────────────────────────────────────────────
 _missing = []

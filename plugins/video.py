@@ -6,8 +6,8 @@ from pyrogram import Client, filters, enums
 from pyrogram.errors import UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, ADMIN_IDS, LOG_GROUP_ID, VIP_CHANNEL_ID
-from database import users, videos, user_video_history, groups
+from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, GROUP_VIDEO_LIMIT, ADMIN_IDS, LOG_GROUP_ID, VIP_CHANNEL_ID
+from database import users, videos, user_video_history, groups, group_video_stats
 from helpers import get_current_window_start, schedule_delete
 
 
@@ -26,13 +26,13 @@ async def _log(client, text: str):
 # ─── Shared button builders ───────────────────────────────────────────────────
 
 def _join_buttons():
-    """Two channel join buttons shown under every video."""
+    """আকর্ষণীয় বাটন — প্রতিটি ভিডিওর নিচে সবসময় দেখাবে।"""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("JOIN", url=JOIN_CHANNEL_LINK),
-            InlineKeyboardButton("JOIN", url=VIP_CHANNEL_LINK),
+            InlineKeyboardButton("🔥 মেইন চ্যানেল", url=JOIN_CHANNEL_LINK),
+            InlineKeyboardButton("💎 VIP চ্যানেল", url=VIP_CHANNEL_LINK),
         ],
-        [InlineKeyboardButton("🎬 আরেকটি ভিডিও পান", callback_data="next_video")],
+        [InlineKeyboardButton("▶️ পরবর্তী ভিডিও দেখুন", callback_data="next_video")],
     ])
 
 
@@ -332,21 +332,131 @@ async def video_cmd(client, message):
             upsert=True,
         )
 
-    # ── In a group: never send video directly — show Bangla prompt + button ──
+    # ── গ্রুপে সরাসরি ভিডিও পাঠাও (সর্বোচ্চ GROUP_VIDEO_LIMIT টি) ────────────
     if in_group:
         import bot_info
         bot_username = bot_info.BOT_USERNAME or "this_bot"
+        group_id     = message.chat.id
+        current_win  = get_current_window_start()
 
-        sent = await message.reply_text(
-            "🎬 <b>ভিডিও দেখতে নিচের বাটনে ক্লিক করুন</b>\n\n"
-            "বাটনে ক্লিক করলে বট আপনাকে সরাসরি প্রাইভেট মেসেজে ভিডিও পাঠাবে। 🔒",
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=_group_prompt_buttons(bot_username),
+        # এই window-এ এই ইউজার এই গ্রুপে কতটি ভিডিও দেখেছে
+        stat = await group_video_stats.find_one({
+            "user_id": user_id, "group_id": group_id, "window_start": current_win,
+        })
+        count_in_group = stat["count"] if stat else 0
+
+        if count_in_group >= GROUP_VIDEO_LIMIT:
+            # লিমিট শেষ — বটে আসতে বলো
+            sent = await message.reply_text(
+                f"🎬 <b>গ্রুপে {GROUP_VIDEO_LIMIT}টি ভিডিও দেখা হয়ে গেছে!</b>\n\n"
+                "আরও ভিডিও দেখতে সরাসরি বটে আসুন 👇\n"
+                "<i>(১২ ঘন্টা পর গ্রুপের লিমিট রিসেট হবে)</i>",
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "🤖 বটে এসে আরো ভিডিও দেখুন",
+                        url=f"https://t.me/{bot_username}?start=video",
+                    )
+                ]]),
+            )
+            asyncio.create_task(schedule_delete(client, group_id, sent.id, 60))
+            asyncio.create_task(schedule_delete(client, group_id, message.id, 5))
+            return
+
+        # অপ্রদর্শিত ভিডিও বেছে নাও
+        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        recent = await user_video_history.find(
+            {"user_id": user_id, "sent_at": {"$gte": seven_days_ago}},
+            {"video_id": 1},
+        ).to_list(length=None)
+        seen_ids = [h["video_id"] for h in recent]
+        pool = await videos.aggregate([
+            {"$match": {"_id": {"$nin": seen_ids}}},
+            {"$sample": {"size": 1}},
+        ]).to_list(length=1)
+
+        if not pool:
+            sent = await message.reply_text(
+                "😔 <b>এই মুহূর্তে কোনো নতুন ভিডিও নেই।</b>\n\nশীঘ্রই নতুন ভিডিও আসবে! 🔔",
+                parse_mode=enums.ParseMode.HTML,
+            )
+            asyncio.create_task(schedule_delete(client, group_id, sent.id, 30))
+            asyncio.create_task(schedule_delete(client, group_id, message.id, 5))
+            return
+
+        video_doc = pool[0]
+        file_id   = video_doc.get("file_id")
+        file_type = video_doc.get("file_type", "video")
+        remaining = GROUP_VIDEO_LIMIT - count_in_group - 1
+
+        vid_caption = (video_doc.get("caption") or "")
+        vid_caption += (
+            f"\n\n🎬 <i>গ্রুপে আর <b>{remaining}</b>টি ভিডিও বাকি।</i>"
+            if remaining > 0
+            else "\n\n🎬 <i>গ্রুপের লিমিট শেষ। বটে এসে আরো দেখুন!</i>"
         )
-        # Auto-delete group prompt after 60 seconds
-        asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 60))
-        # Also delete the user's /video command message
-        asyncio.create_task(schedule_delete(client, message.chat.id, message.id, 5))
+
+        grp_buttons = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔥 মেইন চ্যানেল", url=JOIN_CHANNEL_LINK),
+                InlineKeyboardButton("💎 VIP চ্যানেল", url=VIP_CHANNEL_LINK),
+            ],
+            [InlineKeyboardButton(
+                "🤖 বটে এসে আরো ভিডিও দেখুন",
+                url=f"https://t.me/{bot_username}?start=video",
+            )],
+        ])
+
+        sent = None
+        if file_type == "video":
+            try:
+                sent = await client.send_video(
+                    chat_id=group_id, video=file_id, caption=vid_caption,
+                    has_spoiler=True, supports_streaming=True,
+                    duration=video_doc.get("duration", 0),
+                    width=video_doc.get("width", 0), height=video_doc.get("height", 0),
+                    parse_mode=enums.ParseMode.HTML, reply_markup=grp_buttons,
+                )
+            except Exception:
+                pass
+        if sent is None:
+            try:
+                sent = await client.send_video(
+                    chat_id=group_id, video=file_id, caption=vid_caption,
+                    supports_streaming=True,
+                    duration=video_doc.get("duration", 0),
+                    width=video_doc.get("width", 0), height=video_doc.get("height", 0),
+                    parse_mode=enums.ParseMode.HTML, reply_markup=grp_buttons,
+                )
+            except Exception:
+                try:
+                    sent = await client.send_document(
+                        chat_id=group_id, document=file_id,
+                        caption=vid_caption, parse_mode=enums.ParseMode.HTML,
+                        reply_markup=grp_buttons,
+                    )
+                except Exception:
+                    pass
+
+        if sent:
+            # ১২ ঘন্টা পর ভিডিও মুছে ফেলো
+            asyncio.create_task(_delete_after(client, group_id, sent.id, delay=43200))
+
+        # ইউজারের /video কমান্ড মেসেজ মুছো
+        asyncio.create_task(schedule_delete(client, group_id, message.id, 5))
+
+        # গ্রুপ ভিডিও কাউন্ট বাড়াও (atomic)
+        await group_video_stats.update_one(
+            {"user_id": user_id, "group_id": group_id, "window_start": current_win},
+            {"$inc": {"count": 1}},
+            upsert=True,
+        )
+        # ইতিহাসে সেভ করো
+        await user_video_history.insert_one({
+            "user_id": user_id,
+            "video_id": video_doc["_id"],
+            "sent_at": datetime.now(timezone.utc),
+        })
         return
 
     # ── Private chat: deliver directly ───────────────────────────────────────

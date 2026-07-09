@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from pyrogram import Client, filters, enums
 
-from config import ADMIN_IDS, VIDEO_CHANNEL_ID, LOG_GROUP_ID, VIDEO_DAILY_LIMIT, OWNER_ID
+from config import ADMIN_IDS, VIDEO_CHANNEL_ID, LOG_GROUP_ID, VIDEO_DAILY_LIMIT, GROUP_VIDEO_LIMIT, OWNER_ID
 from database import users, videos, groups
 from helpers import get_current_window_start
 
@@ -511,5 +511,35 @@ async def broadcast_cmd(client, message):
         "✅ <b>Broadcast complete!</b>\n\n"
         f"👥 Users — ✅ {success}  ❌ {failed}\n"
         f"🏘 Groups — ✅ {g_success}  ❌ {g_failed}",
+        parse_mode=enums.ParseMode.HTML,
+    )
+
+
+# ─── /cmdlist — সকল কমান্ডের তালিকা ─────────────────────────────────────────
+
+@Client.on_message(filters.command("cmdlist") & filters.user(ADMIN_IDS))
+async def cmdlist(client, message):
+    """Admin: সব কমান্ডের তালিকা দেখাও।"""
+    await message.reply_text(
+        "📋 <b>সকল কমান্ডের তালিকা</b>\n"
+        "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n"
+        "👤 <b>ইউজার কমান্ড:</b>\n"
+        "/start — বট শুরু করুন\n"
+        "/help — সাহায্য দেখুন\n"
+        "/video — এলোমেলো ভিডিও পান 🎬\n"
+        "/profile — আপনার প্রোফাইল দেখুন\n\n"
+        "🔑 <b>এডমিন কমান্ড:</b>\n"
+        "/stats — সকল পরিসংখ্যান দেখুন\n"
+        "/broadcast — সবাইকে মেসেজ পাঠান (reply করে)\n"
+        "/notifyusers — ভিডিও নোটিফিকেশন পাঠান\n"
+        "/addvideo — ভিডিও যোগ করুন (reply করে)\n"
+        "/delvideo <নম্বর> — নির্দিষ্ট ভিডিও মুছুন\n"
+        "/cmdlist — এই কমান্ড লিস্ট দেখুন\n\n"
+        "⚙️ <b>সেটিংস:</b>\n"
+        f"🎬 PM ভিডিও লিমিট: <b>{VIDEO_DAILY_LIMIT}</b> per 12h\n"
+        f"🏘 গ্রুপ ভিডিও লিমিট: <b>{GROUP_VIDEO_LIMIT}</b> per 12h\n\n"
+        "📩 <b>সাপোর্ট ইনবক্স:</b>\n"
+        "ইউজার বটে সাধারণ মেসেজ লিখলে এই গ্রুপে আসবে।\n"
+        "Reply করলে সরাসরি ইউজারের কাছে যাবে। ✅",
         parse_mode=enums.ParseMode.HTML,
     )
