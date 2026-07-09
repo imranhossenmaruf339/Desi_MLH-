@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pyrogram import Client, filters, enums
 
-from config import OWNER_ID, VIDEO_CHANNEL_ID, LOG_GROUP_ID, VIDEO_DAILY_LIMIT
+from config import ADMIN_IDS, VIDEO_CHANNEL_ID, LOG_GROUP_ID, VIDEO_DAILY_LIMIT, OWNER_ID
 from database import users, videos, groups
 from helpers import get_current_window_start
 
@@ -12,7 +12,7 @@ from helpers import get_current_window_start
 
 @Client.on_message(
     filters.private
-    & filters.user(OWNER_ID)
+    & filters.user(ADMIN_IDS)
     & (filters.video | filters.document)
 )
 async def admin_save_video(client, message):
@@ -169,7 +169,7 @@ async def auto_index_new_video(client, message):
 
 # ─── /fixvideos — re-process document-type videos for spoiler support ────────
 
-@Client.on_message(filters.command("fixvideos") & filters.user(OWNER_ID))
+@Client.on_message(filters.command("fixvideos") & filters.user(ADMIN_IDS))
 async def fix_videos_cmd(client, message):
     """Re-send every document-type video through send_video to get a spoiler-capable file_id."""
     doc_vids = await videos.find({"file_type": "document"}).to_list(length=None)
@@ -228,7 +228,7 @@ async def fix_videos_cmd(client, message):
 
 # ─── /users — list all registered users (monitor group or owner PM) ──────────
 
-@Client.on_message(filters.command("users") & (filters.user(OWNER_ID) | filters.chat(LOG_GROUP_ID)))
+@Client.on_message(filters.command("users") & (filters.user(ADMIN_IDS) | filters.chat(LOG_GROUP_ID)))
 async def users_cmd(client, message):
     all_users = await users.find({}, {"user_id": 1, "username": 1, "first_name": 1}).to_list(length=None)
     if not all_users:
@@ -251,7 +251,7 @@ async def users_cmd(client, message):
 
 # ─── /groups — list all groups the bot is in ─────────────────────────────────
 
-@Client.on_message(filters.command("groups") & (filters.user(OWNER_ID) | filters.chat(LOG_GROUP_ID)))
+@Client.on_message(filters.command("groups") & (filters.user(ADMIN_IDS) | filters.chat(LOG_GROUP_ID)))
 async def groups_cmd(client, message):
     all_groups = await groups.find({}, {"group_id": 1, "title": 1}).to_list(length=None)
     if not all_groups:
@@ -273,10 +273,10 @@ async def groups_cmd(client, message):
 
 # ─── /updategroup — register current group (or group by ID) in DB ─────────────
 
-@Client.on_message(filters.command("updategroup") & filters.user(OWNER_ID))
+@Client.on_message(filters.command("updategroup") & filters.user(ADMIN_IDS))
 async def updategroup_cmd(client, message):
     # If run inside a group → register that group
-    if message.chat.type in ("group", "supergroup"):
+    if message.chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
         gid = message.chat.id
         title = message.chat.title or "Unknown"
         await groups.update_one(
@@ -331,7 +331,7 @@ async def updategroup_cmd(client, message):
 
 # ─── /delvideo <index> — remove a video by its position number ───────────────
 
-@Client.on_message(filters.command("delvideo") & filters.user(OWNER_ID))
+@Client.on_message(filters.command("delvideo") & filters.user(ADMIN_IDS))
 async def del_video_cmd(client, message):
     if len(message.command) < 2:
         await message.reply_text(
@@ -366,13 +366,12 @@ async def del_video_cmd(client, message):
 
 # ─── /addlimit <user_id> <amount> — give a user extra videos ─────────────────
 
-@Client.on_message(filters.command("addlimit") & filters.user(OWNER_ID))
+@Client.on_message(filters.command("addlimit") & filters.user(ADMIN_IDS))
 async def addlimit_cmd(client, message):
     """
     /addlimit <user_id> <amount>
     Decreases the user's video_count by <amount>, effectively giving them that
     many extra videos in the current 12-hour window.
-    Owner-only — not opened to monitor group members.
     """
     if len(message.command) < 3:
         await message.reply_text(
@@ -422,7 +421,7 @@ async def addlimit_cmd(client, message):
         f"🕐 {datetime.utcnow().strftime('%d %b %Y, %I:%M %p UTC')}"
     )
 
-    # Notify monitor group (always, even if command came from there)
+    # Notify monitor group
     try:
         await client.send_message(
             chat_id=LOG_GROUP_ID,
@@ -432,7 +431,7 @@ async def addlimit_cmd(client, message):
     except Exception:
         pass
 
-    # Notify the user they got extra videos
+    # Notify the user
     try:
         await client.send_message(
             chat_id=target_id,
@@ -452,7 +451,7 @@ async def addlimit_cmd(client, message):
 
 # ─── /stats ───────────────────────────────────────────────────────────────────
 
-@Client.on_message(filters.command("stats") & filters.user(OWNER_ID))
+@Client.on_message(filters.command("stats") & filters.user(ADMIN_IDS))
 async def stats_cmd(client, message):
     total_users = await users.count_documents({})
     total_videos = await videos.count_documents({})
@@ -466,7 +465,7 @@ async def stats_cmd(client, message):
 
 # ─── /broadcast ───────────────────────────────────────────────────────────────
 
-@Client.on_message(filters.command("broadcast") & filters.user(OWNER_ID))
+@Client.on_message(filters.command("broadcast") & filters.user(ADMIN_IDS))
 async def broadcast_cmd(client, message):
     if not message.reply_to_message:
         await message.reply_text(
@@ -497,7 +496,7 @@ async def broadcast_cmd(client, message):
 
     success = failed = 0
 
-    # ── Send to all individual users (copy — no "Forwarded from" header) ─────
+    # ── Send to all individual users
     for user_doc in all_users:
         try:
             await client.copy_message(
@@ -510,7 +509,7 @@ async def broadcast_cmd(client, message):
             failed += 1
         await asyncio.sleep(0.05)
 
-    # ── Send to all groups ────────────────────────────────────────────────────
+    # ── Send to all groups
     g_success = g_failed = 0
     for group_doc in all_group_docs:
         try:

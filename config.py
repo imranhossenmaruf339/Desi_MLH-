@@ -3,23 +3,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ─── সরাসরি আপনার তথ্যগুলো নিচে বসান ──────────────────────────────────────────
-# মনে রাখবেন: রিপোজিটরি অবশ্যই PRIVATE করে রাখবেন।
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_ID = int(os.getenv("API_ID", "0"))
+API_HASH = os.getenv("API_HASH")
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "এখানে_বটের_টোকেন_বসান")
-API_ID = int(os.getenv("API_ID", "0"))  # এখানে API ID বসান (যেমন: 123456)
-API_HASH = os.getenv("API_HASH", "এখানে_API_HASH_বসান")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # এখানে আপনার আইডি বসান
-MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL") or "এখানে_MONGO_URI_বসান"
+# Multiple Admins support
+_admin_ids_raw = os.getenv("ADMIN_ID", "")
+ADMIN_IDS = [int(i.strip()) for i in _admin_ids_raw.split(",") if i.strip().isdigit()]
+OWNER_ID = ADMIN_IDS[0] if ADMIN_IDS else 0
 
-VIDEO_CHANNEL_ID = int(os.getenv("VIDEO_CHANNEL_ID", "-1002623940581")) # ভিডিও চ্যানেল আইডি
-LOG_GROUP_ID = int(os.getenv("LOG_GROUP_ID", "0")) # লগ গ্রুপ আইডি (এখানে বসান)
+MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL")
 
-# ─── অন্যান্য কনফিগারেশন ──────────────────────────────────────────────────────
+VIDEO_CHANNEL_ID = int(os.getenv("VIDEO_CHANNEL_ID", "-1002623940581"))
+LOG_GROUP_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 
-JOIN_CHANNEL_LINK = os.getenv("JOIN_CHANNEL_LINK", "https://t.me/+YTZcUp9h0qYwNjc1")
-VIP_CHANNEL_LINK  = os.getenv("VIP_CHANNEL_LINK", "https://t.me/+QuC95d9R5zI2MTM9")
+JOIN_CHANNEL_LINK = os.getenv("VIP_CHANNEL1_LINK", "https://t.me/+YTZcUp9h0qYwNjc1")
+VIP_CHANNEL_LINK  = os.getenv("VIP_CHANNEL_LINK", "https://t.me/+ob96Z-mZmjBjNGQ1")
 
+# VIP_CHANNEL_ID is needed for membership check
 _vip_raw = os.getenv("VIP_CHANNEL_ID", "")
 try:
     VIP_CHANNEL_ID = int(_vip_raw) if _vip_raw else None

@@ -4,7 +4,7 @@ from pyrogram import Client, filters, enums
 from pyrogram.errors import UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import OWNER_ID, JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, JOIN_CHANNEL_2_USERNAME, LOG_GROUP_ID
+from config import ADMIN_IDS, JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, JOIN_CHANNEL_2_USERNAME, LOG_GROUP_ID
 from database import users, video_requests, user_video_history
 from helpers import get_current_window_start
 
@@ -186,7 +186,7 @@ async def confirm_join(client, callback_query):
 
 @Client.on_callback_query(filters.regex(r"^admin_approve:(\d+)$"))
 async def admin_approve(client, callback_query):
-    if callback_query.from_user.id != OWNER_ID:
+    if callback_query.from_user.id not in ADMIN_IDS:
         await callback_query.answer("❌ Unauthorized.", show_alert=True)
         return
 
@@ -241,7 +241,7 @@ async def admin_approve(client, callback_query):
 
 @Client.on_callback_query(filters.regex(r"^admin_decline:(\d+)$"))
 async def admin_decline(client, callback_query):
-    if callback_query.from_user.id != OWNER_ID:
+    if callback_query.from_user.id not in ADMIN_IDS:
         await callback_query.answer("❌ Unauthorized.", show_alert=True)
         return
 

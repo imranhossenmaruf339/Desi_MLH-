@@ -3,9 +3,10 @@ import random
 from datetime import datetime, timedelta
 
 from pyrogram import Client, filters, enums
+from pyrogram.errors import UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, OWNER_ID, LOG_GROUP_ID
+from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, ADMIN_IDS, LOG_GROUP_ID, VIP_CHANNEL_ID
 from database import users, videos, user_video_history, groups
 from helpers import get_current_window_start, schedule_delete
 
@@ -59,9 +60,32 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
     """
     Fetch an unseen video for user_id and send it to chat_id.
     Returns (success: bool, error_msg: str | None).
-    Skips the daily limit entirely for OWNER_ID.
+    Skips the daily limit entirely for ADMIN_IDS.
     """
-    is_admin = (user_id == OWNER_ID)
+    is_admin = (user_id in ADMIN_IDS)
+
+    # ── Mandatory Join Check ──────────────────────────────────────────────────
+    if not is_admin and VIP_CHANNEL_ID:
+        try:
+            member = await client.get_chat_member(VIP_CHANNEL_ID, user_id)
+            if member.status in [enums.ChatMemberStatus.BANNED, enums.ChatMemberStatus.LEFT]:
+                raise UserNotParticipant
+        except (UserNotParticipant, Exception):
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📢 Join Channel", url=VIP_CHANNEL_LINK)],
+                [InlineKeyboardButton("✅ I have Joined", callback_data="next_video")]
+            ])
+            await client.send_message(
+                chat_id=chat_id,
+                text=(
+                    "❌ <b>আপনি আমাদের চ্যানেলে জয়েন করেননি!</b>\n\n"
+                    "ভিডিও পেতে হলে আপনাকে অবশ্যই আমাদের চ্যানেলে জয়েন থাকতে হবে। "
+                    "নিচের বাটনে ক্লিক করে জয়েন করুন এবং তারপর আবার চেষ্টা করুন।"
+                ),
+                parse_mode=enums.ParseMode.HTML,
+                reply_markup=keyboard
+            )
+            return False, "not_joined"
 
     # ── Ensure user record ───────────────────────────────────────────────────
     user = await users.find_one({"user_id": user_id})
@@ -327,5 +351,5 @@ async def next_video_callback(client, callback_query):
 
     await callback_query.answer("⏳ পাঠাচ্ছি...")
     success, reason = await deliver_video(client, user_id, chat_id)
-    if not success and reason not in ("limit", "no_pool", "empty"):
+    if not success and reason not in ("limit", "no_pool", "empty", "not_joined"):
         await callback_query.answer("❌ কিছু একটা সমস্যা হয়েছে। আবার চেষ্টা করুন।", show_alert=True)
