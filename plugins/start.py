@@ -5,7 +5,7 @@ from pyrogram import Client, filters, enums
 
 from config import LOG_GROUP_ID, VIP_CHANNEL_LINK
 from database import users
-from helpers import get_current_window_start, schedule_delete
+from helpers import get_current_window_start, schedule_delete, is_rate_limited
 from plugins.video import deliver_video
 
 
@@ -97,6 +97,17 @@ async def start(client, message):
     deep_link = args[1].strip() if len(args) > 1 else ""
 
     if deep_link == "video" and not in_group:
+        # ── Rate limit check ─────────────────────────────────────────────────
+        from config import ADMIN_IDS
+        if user_id not in ADMIN_IDS:
+            wait = is_rate_limited(user_id, cooldown=3.0)
+            if wait > 0:
+                await message.reply_text(
+                    f"⏳ একটু ধীরে! <b>{wait:.1f} সেকেন্ড</b> পর আবার চেষ্টা করুন।",
+                    parse_mode=enums.ParseMode.HTML,
+                )
+                return
+
         # Register / log the user first (already done above), then deliver video
         try:
             await client.send_message(
