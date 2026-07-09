@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pyrogram import Client, filters, enums
 
-from config import LOG_GROUP_ID
+from config import LOG_GROUP_ID, VIP_CHANNEL_LINK
 from database import users
 from helpers import get_current_window_start, schedule_delete
 from plugins.video import deliver_video
@@ -25,7 +25,7 @@ def _make_welcome_keyboard(bot_username: str):
         )],
         # Row 2 — VIP channel + buy premium
         [
-            InlineKeyboardButton("💎 VIP Channel", url="https://t.me/+QuC95d9R5zI2MTM9"),
+            InlineKeyboardButton("💎 VIP Channel", url=VIP_CHANNEL_LINK),
             InlineKeyboardButton("💳 Buy Premium", url="https://t.me/GhostinWhispers1"),
         ],
         # Row 3 — my status + share bot
