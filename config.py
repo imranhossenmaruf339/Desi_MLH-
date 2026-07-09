@@ -1,4 +1,5 @@
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -18,7 +19,9 @@ VIDEO_CHANNEL_ID = int(os.getenv("VIDEO_CHANNEL_ID", "-1002623940581"))
 LOG_GROUP_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 
 JOIN_CHANNEL_LINK = os.getenv("VIP_CHANNEL1_LINK", "https://t.me/+YTZcUp9h0qYwNjc1")
-VIP_CHANNEL_LINK  = os.getenv("VIP_CHANNEL_LINK", "https://t.me/+ob96Z-mZmjBjNGQ1")
+
+# Fix: .env-এ VIP_CHANNEL_LINK নামে সেট করুন (আগে VIP_CHANNEL2_LINK ছিল — ভুল নাম)
+VIP_CHANNEL_LINK = os.getenv("VIP_CHANNEL_LINK", "https://t.me/+ob96Z-mZmjBjNGQ1")
 
 # VIP_CHANNEL_ID is needed for membership check
 _vip_raw = os.getenv("VIP_CHANNEL_ID", "")
@@ -30,3 +33,19 @@ except (ValueError, TypeError):
 JOIN_CHANNEL_2_LINK     = os.getenv("JOIN_CHANNEL_2_LINK", "https://t.me/the_couple_vibe")
 JOIN_CHANNEL_2_USERNAME = os.getenv("JOIN_CHANNEL_2_USERNAME", "the_couple_vibe")
 VIDEO_DAILY_LIMIT = int(os.getenv("VIDEO_DAILY_LIMIT", "10"))
+
+# ── Required variable validation ─────────────────────────────────────────────
+_missing = []
+if not BOT_TOKEN:
+    _missing.append("BOT_TOKEN")
+if not API_HASH or API_ID == 0:
+    _missing.append("API_ID / API_HASH")
+if not MONGO_URI:
+    _missing.append("MONGO_URI")
+if not ADMIN_IDS:
+    _missing.append("ADMIN_ID")
+
+if _missing:
+    print(f"[ERROR] এই environment variable(s) সেট করা নেই: {', '.join(_missing)}")
+    print("[ERROR] .env ফাইল বা deployment platform-এ variable গুলো সেট করুন।")
+    sys.exit(1)

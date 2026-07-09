@@ -1,6 +1,6 @@
 import asyncio
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from pyrogram import Client, filters, enums
 from pyrogram.errors import UserNotParticipant
@@ -65,12 +65,21 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
     is_admin = (user_id in ADMIN_IDS)
 
     # ── Mandatory Join Check ──────────────────────────────────────────────────
+    # Fix: শুধু UserNotParticipant ধরুন — অন্য Exception ধরলে নেটওয়ার্ক এরর হলেও
+    # ইউজার ভুলভাবে ব্লক হয়ে যায়
     if not is_admin and VIP_CHANNEL_ID:
+        is_member = True  # default: সন্দেহের সুবিধা দাও
         try:
             member = await client.get_chat_member(VIP_CHANNEL_ID, user_id)
             if member.status in [enums.ChatMemberStatus.BANNED, enums.ChatMemberStatus.LEFT]:
-                raise UserNotParticipant
-        except (UserNotParticipant, Exception):
+                is_member = False
+        except UserNotParticipant:
+            is_member = False
+        except Exception:
+            # API error বা network error — block করবো না
+            is_member = True
+
+        if not is_member:
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📢 Join Channel", url=VIP_CHANNEL_LINK)],
                 [InlineKeyboardButton("✅ I have Joined", callback_data="next_video")]
@@ -78,9 +87,9 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
             await client.send_message(
                 chat_id=chat_id,
                 text=(
-                    "❌ <b>আপনি আমাদের চ্যানেলে জয়েন করেননি!</b>\n\n"
-                    "ভিডিও পেতে হলে আপনাকে অবশ্যই আমাদের চ্যানেলে জয়েন থাকতে হবে। "
-                    "নিচের বাটনে ক্লিক করে জয়েন করুন এবং তারপর আবার চেষ্টা করুন।"
+                    "❌ <b>আপনি আমাদের চ্যানেলে জয়েন করেননি!</b>\n\n"
+                    "ভিডিও পেতে হলে আপনাকে অবশ্যই আমাদের চ্যানেলে জয়েন থাকতে হবে। "
+                    "নিচের বাটনে ক্লিক করে জয়েন করুন এবং তারপর আবার চেষ্টা করুন।"
                 ),
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=keyboard
@@ -99,7 +108,7 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
             "referrals": 0,
             "video_count": 0,
             "video_window_start": window,
-            "joined_at": datetime.utcnow(),
+            "joined_at": datetime.now(timezone.utc),
         })
         user = await users.find_one({"user_id": user_id})
 
@@ -115,13 +124,12 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
             {"$set": {"video_count": 0, "video_window_start": current_window}},
         )
 
-    # ── Daily limit (admin always bypasses) ──────────────────────────────────
+    # ── Daily limit check (admin সবসময় bypass করে) ──────────────────────────
     if not is_admin and video_count >= VIDEO_DAILY_LIMIT:
-        name      = user.get("first_name") or "Unknown"
-        uname     = f"@{user['username']}" if user.get("username") else "no username"
-        now_str   = datetime.utcnow().strftime("%d %b %Y, %I:%M %p UTC")
+        name    = user.get("first_name") or "Unknown"
+        uname   = f"@{user['username']}" if user.get("username") else "no username"
+        now_str = datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC")
 
-        # Notify monitor group that this user just hit their limit
         await _log(
             client,
             f"🚫 <b>লিমিট শেষ হয়েছে!</b>\n\n"
@@ -156,42 +164,50 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
         )
         return False, "limit"
 
-    # ── Pick unseen video ────────────────────────────────────────────────────
-    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    # ── Pick unseen video (Fix: সব ভিডিও RAM-এ না এনে MongoDB aggregation ব্যবহার) ──
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
     recent = await user_video_history.find(
         {"user_id": user_id, "sent_at": {"$gte": seven_days_ago}},
         {"video_id": 1},
     ).to_list(length=None)
-    seen_ids = {h["video_id"] for h in recent}
+    seen_ids = [h["video_id"] for h in recent]
 
-    all_vids = await videos.find().to_list(length=None)
-    pool = [v for v in all_vids if v["_id"] not in seen_ids]
-
-    if not pool and all_vids:
-        await client.send_message(
-            chat_id=chat_id,
-            text=(
-                "🎬 <b>You've watched all available videos!</b>\n\n"
-                "New videos will be added soon. You'll be notified when they arrive! 🔔\n\n"
-                "Come back in a few days — watched videos also refresh after <b>7 days</b>."
-            ),
-            parse_mode=enums.ParseMode.HTML,
-        )
-        return False, "no_pool"
+    # MongoDB $sample দিয়ে সরাসরি একটি random unseen ভিডিও আনো
+    pipeline = [
+        {"$match": {"_id": {"$nin": seen_ids}}},
+        {"$sample": {"size": 1}},
+    ]
+    pool = await videos.aggregate(pipeline).to_list(length=1)
 
     if not pool:
-        await client.send_message(
-            chat_id=chat_id,
-            text="❌ <b>No videos available yet.</b>\n\nPlease check back later!",
-            parse_mode=enums.ParseMode.HTML,
-        )
-        return False, "empty"
+        # দেখো ডাটাবেজে কোনো ভিডিও আছে কিনা
+        total_vids = await videos.count_documents({})
+        if total_vids > 0:
+            # ভিডিও আছে কিন্তু ইউজার সব দেখে ফেলেছে
+            await client.send_message(
+                chat_id=chat_id,
+                text=(
+                    "🎬 <b>You've watched all available videos!</b>\n\n"
+                    "New videos will be added soon. You'll be notified when they arrive! 🔔\n\n"
+                    "Come back in a few days — watched videos also refresh after <b>7 days</b>."
+                ),
+                parse_mode=enums.ParseMode.HTML,
+            )
+            return False, "no_pool"
+        else:
+            # ডাটাবেজে কোনো ভিডিও নেই
+            await client.send_message(
+                chat_id=chat_id,
+                text="❌ <b>No videos available yet.</b>\n\nPlease check back later!",
+                parse_mode=enums.ParseMode.HTML,
+            )
+            return False, "empty"
 
-    video_doc = random.choice(pool)
-    file_id = video_doc.get("file_id")
+    video_doc = pool[0]
+    file_id   = video_doc.get("file_id")
     file_type = video_doc.get("file_type", "video")
 
-    # ── Remaining count hint (not shown to admin — they have no limit) ───────
+    # ── Remaining count hint (admin-কে দেখানো হয় না) ────────────────────────
     remaining = (VIDEO_DAILY_LIMIT - video_count - 1) if not is_admin else None
     remaining_text = (
         f"\n\n📹 <i>আপনার কাছে এই উইন্ডোতে আরও <b>{remaining}</b>টি ভিডিও বাকি আছে।</i>"
@@ -202,8 +218,8 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
     caption = (video_doc.get("caption", "") or "") + remaining_text
 
     # ── Send video ───────────────────────────────────────────────────────────
+    # Fix: spoiler_err ভেরিয়েবল সরানো হয়েছে — আগে সেট হতো কিন্তু কোথাও ব্যবহার হতো না
     sent = None
-    spoiler_err = None
 
     if file_type == "video":
         try:
@@ -218,8 +234,8 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
                 height=video_doc.get("height", 0),
                 reply_markup=_join_buttons(),
             )
-        except Exception as e:
-            spoiler_err = str(e)
+        except Exception:
+            pass  # spoiler support নেই হলে নিচে আবার চেষ্টা হবে
 
     if sent is None:
         try:
@@ -253,23 +269,28 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
     if sent:
         asyncio.create_task(_delete_after(client, chat_id, sent.id, delay=1800))
 
-    # ── Record history + increment counter (admin counter also tracked) ───────
+    # ── Fix: Atomic counter increment — race condition রোধ করতে $inc ব্যবহার ──
+    # আগে: read → compute → write (দুটো request একসাথে এলে একই count পড়তো)
+    # এখন: MongoDB-তে atomically increment হয়
     await user_video_history.insert_one({
         "user_id": user_id,
         "video_id": video_doc["_id"],
-        "sent_at": datetime.utcnow(),
+        "sent_at": datetime.now(timezone.utc),
     })
-    new_count = video_count + 1
+
     if not is_admin:
         await users.update_one(
             {"user_id": user_id},
-            {"$set": {"video_count": new_count}},
+            {"$inc": {"video_count": 1}},
         )
+        new_count = video_count + 1
+    else:
+        new_count = video_count + 1
 
     # ── Log to monitor group ──────────────────────────────────────────────────
     name    = user.get("first_name") or "Unknown"
     uname   = f"@{user['username']}" if user.get("username") else "no username"
-    now_str = datetime.utcnow().strftime("%d %b %Y, %I:%M %p UTC")
+    now_str = datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC")
     total_watched = await user_video_history.count_documents({"user_id": user_id})
 
     if is_admin:
@@ -339,10 +360,8 @@ async def next_video_callback(client, callback_query):
     user_id = callback_query.from_user.id
     chat_id = callback_query.message.chat.id
 
-    # Safety: only deliver in private chats — group button should never appear, but guard anyway
+    # Safety: only deliver in private chats
     if callback_query.message.chat.type != enums.ChatType.PRIVATE:
-        import bot_info
-        bot_username = bot_info.BOT_USERNAME or "this_bot"
         await callback_query.answer(
             "ভিডিও শুধু প্রাইভেট চ্যাটে পাঠানো হয়। নিচের লিঙ্কে ক্লিক করুন।",
             show_alert=True,

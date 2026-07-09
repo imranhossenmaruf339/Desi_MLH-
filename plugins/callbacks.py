@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pyrogram import Client, filters, enums
 from pyrogram.errors import UserNotParticipant
@@ -88,7 +88,6 @@ async def confirm_join(client, callback_query):
                 )
                 return
         except UserNotParticipant:
-            # Telegram confirmed the user is not in the channel
             await callback_query.answer(
                 "❌ You haven't joined the VIP Channel yet!\n"
                 "Please join first, then tap Confirmed again.",
@@ -96,14 +95,11 @@ async def confirm_join(client, callback_query):
             )
             return
         except Exception:
-            # Cannot verify (bot not admin, network error, etc.) — let admin decide manually
-            pass
-    # If VIP_CHANNEL_ID is not configured OR check could not run, send request
-    # straight to the monitor group for admin manual verification.
+            pass  # verify করা গেলো না — admin-কে পাঠাই
 
     # ── Guard: pending request less than 24 h old ─────────────────────────────
     from datetime import timedelta
-    cutoff = datetime.utcnow() - timedelta(hours=24)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     existing = await video_requests.find_one({
         "user_id": requester_id,
         "status": "pending",
@@ -128,7 +124,7 @@ async def confirm_join(client, callback_query):
         "username": callback_query.from_user.username or "N/A",
         "first_name": callback_query.from_user.first_name or "",
         "status": "pending",
-        "requested_at": datetime.utcnow(),
+        "requested_at": datetime.now(timezone.utc),
     })
 
     keyboard = InlineKeyboardMarkup([
@@ -144,7 +140,6 @@ async def confirm_join(client, callback_query):
         else "N/A"
     )
 
-    # Send to monitor group — surface any error so it isn't silently lost
     try:
         await client.send_message(
             chat_id=LOG_GROUP_ID,
@@ -192,24 +187,27 @@ async def admin_approve(client, callback_query):
 
     user_id = int(callback_query.matches[0].group(1))
 
-    # Set video_count = LIMIT - 15 so the user can watch 15 more videos.
-    # e.g. LIMIT=10, count=-5 → needs 15 more watches to reach 10 again.
-    extra_count = VIDEO_DAILY_LIMIT - 15
+    # Fix: video_count নেগেটিভ হওয়া রোধ করতে max(0, ...) ব্যবহার
+    # +15 bonus দিতে current count থেকে 15 কমাও (0-এর নিচে যাবে না)
+    user = await users.find_one({"user_id": user_id})
+    old_count = user.get("video_count", 0) if user else 0
+    new_count = max(0, old_count - 15)   # 0-এর নিচে নামবে না
+
     current_window = get_current_window_start()
     await users.update_one(
         {"user_id": user_id},
         {
-            "$set": {"video_count": extra_count, "video_window_start": current_window},
+            "$set": {"video_count": new_count, "video_window_start": current_window},
             "$setOnInsert": {
                 "points": 0, "referrals": 0,
-                "joined_at": datetime.utcnow(),
+                "joined_at": datetime.now(timezone.utc),
             },
         },
         upsert=True,
     )
     await video_requests.update_one(
         {"user_id": user_id, "status": "pending"},
-        {"$set": {"status": "approved", "reviewed_at": datetime.utcnow()}},
+        {"$set": {"status": "approved", "reviewed_at": datetime.now(timezone.utc)}},
     )
 
     try:
@@ -249,7 +247,7 @@ async def admin_decline(client, callback_query):
 
     await video_requests.update_one(
         {"user_id": user_id, "status": "pending"},
-        {"$set": {"status": "declined", "reviewed_at": datetime.utcnow()}},
+        {"$set": {"status": "declined", "reviewed_at": datetime.now(timezone.utc)}},
     )
 
     try:

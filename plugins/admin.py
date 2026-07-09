@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pyrogram import Client, filters, enums
 
@@ -38,7 +38,6 @@ async def admin_save_video(client, message):
         and message.document.mime_type
         and message.document.mime_type.startswith("video/")
     ):
-        # Re-send as video to get a spoiler-capable file_id; use monitor group as temp destination
         try:
             tmp = await client.send_video(
                 chat_id=LOG_GROUP_ID,
@@ -51,13 +50,11 @@ async def admin_save_video(client, message):
             height = tmp.video.height or 0
             await tmp.delete()
         except Exception:
-            # Fallback: store as document (no spoiler support)
             file_id = message.document.file_id
             file_type = "document"
     else:
         return
 
-    # Check if DB was empty before this insert
     count_before = await videos.count_documents({})
 
     await videos.insert_one({
@@ -67,16 +64,14 @@ async def admin_save_video(client, message):
         "duration": duration,
         "width": width,
         "height": height,
-        "added_at": datetime.utcnow(),
+        "added_at": datetime.now(timezone.utc),
     })
 
     total = await videos.count_documents({})
 
-    # If DB was empty, notify all users that videos are now available
     if count_before == 0 and total > 0:
         asyncio.create_task(_notify_users_videos_available(client))
 
-    # ── Confirmation goes to monitor group only ───────────────────────────────
     spoiler_note = "✅ Spoiler-capable" if file_type == "video" else "⚠️ Document (no spoiler)"
     try:
         await client.send_message(
@@ -92,12 +87,14 @@ async def admin_save_video(client, message):
     except Exception:
         pass
 
-    # Brief acknowledgement in admin's PM so they know it was received
     await message.reply_text("✅ Saved.", parse_mode=enums.ParseMode.HTML)
 
 
 async def _notify_users_videos_available(client):
-    """Notify all users that the video library is now available."""
+    """Notify all users that the video library is now available.
+    Fix: rate limiting রোধ করতে প্রতি মেসেজের পর পর্যাপ্ত বিরতি রাখা হয়েছে।
+    Telegram প্রতি সেকেন্ডে সর্বোচ্চ ~30 মেসেজ পাঠাতে দেয়।
+    """
     all_users = await users.find({}, {"user_id": 1}).to_list(length=None)
     for u in all_users:
         try:
@@ -109,7 +106,8 @@ async def _notify_users_videos_available(client):
                 ),
                 parse_mode=enums.ParseMode.HTML,
             )
-            await asyncio.sleep(0.05)
+            # Fix: 0.05 → 0.1 সেকেন্ড বিরতি (Telegram rate limit সহ্য করতে)
+            await asyncio.sleep(0.1)
         except Exception:
             pass
 
@@ -118,9 +116,7 @@ async def _notify_users_videos_available(client):
 
 @Client.on_message(filters.chat(VIDEO_CHANNEL_ID))
 async def auto_index_new_video(client, message):
-    """Save file_id when a video is posted to the channel.
-    Document-type videos are converted to proper video type for spoiler support.
-    """
+    """Save file_id when a video is posted to the channel."""
     file_id = None
     file_type = "video"
     duration = width = height = 0
@@ -137,7 +133,6 @@ async def auto_index_new_video(client, message):
         and message.document.mime_type
         and message.document.mime_type.startswith("video/")
     ):
-        # Re-send to monitor group as video to get a spoiler-capable file_id
         try:
             tmp = await client.send_video(
                 chat_id=LOG_GROUP_ID,
@@ -150,7 +145,6 @@ async def auto_index_new_video(client, message):
             height = tmp.video.height or 0
             await tmp.delete()
         except Exception:
-            # Fallback: store as document (no spoiler support)
             file_id = message.document.file_id
             file_type = "document"
     else:
@@ -163,7 +157,7 @@ async def auto_index_new_video(client, message):
         "duration": duration,
         "width": width,
         "height": height,
-        "added_at": datetime.utcnow(),
+        "added_at": datetime.now(timezone.utc),
     })
 
 
@@ -221,12 +215,12 @@ async def fix_videos_cmd(client, message):
         f"✅ <b>Fix complete!</b>\n\n"
         f"🎭 Converted: <b>{fixed}</b>\n"
         f"❌ Failed: <b>{failed}</b>\n\n"
-        f"{'All videos now support spoiler! 🎉' if failed == 0 else 'Some videos could not be converted — they may stay without spoiler.'}",
+        f"{'All videos now support spoiler! 🎉' if failed == 0 else 'Some videos could not be converted.'}",
         parse_mode=enums.ParseMode.HTML,
     )
 
 
-# ─── /users — list all registered users (monitor group or owner PM) ──────────
+# ─── /users — list all registered users ──────────────────────────────────────
 
 @Client.on_message(filters.command("users") & (filters.user(ADMIN_IDS) | filters.chat(LOG_GROUP_ID)))
 async def users_cmd(client, message):
@@ -242,7 +236,6 @@ async def users_cmd(client, message):
         uid = u["user_id"]
         lines.append(f"• {name} | {uname} | <code>{uid}</code>")
 
-    # Split into chunks of 50 to avoid message length limit
     chunk_size = 50
     for i in range(0, len(lines), chunk_size):
         chunk = lines[i:i + chunk_size] if i > 0 else lines[:chunk_size]
@@ -275,13 +268,12 @@ async def groups_cmd(client, message):
 
 @Client.on_message(filters.command("updategroup") & filters.user(ADMIN_IDS))
 async def updategroup_cmd(client, message):
-    # If run inside a group → register that group
     if message.chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
         gid = message.chat.id
         title = message.chat.title or "Unknown"
         await groups.update_one(
             {"group_id": gid},
-            {"$set": {"group_id": gid, "title": title, "updated_at": datetime.utcnow()}},
+            {"$set": {"group_id": gid, "title": title, "updated_at": datetime.now(timezone.utc)}},
             upsert=True,
         )
         await message.reply_text(
@@ -292,7 +284,6 @@ async def updategroup_cmd(client, message):
         )
         return
 
-    # If run in PM/monitor group with an ID argument → register that ID
     if len(message.command) >= 2:
         try:
             gid = int(message.command[1])
@@ -310,7 +301,7 @@ async def updategroup_cmd(client, message):
             title = f"Group {gid}"
         await groups.update_one(
             {"group_id": gid},
-            {"$set": {"group_id": gid, "title": title, "updated_at": datetime.utcnow()}},
+            {"$set": {"group_id": gid, "title": title, "updated_at": datetime.now(timezone.utc)}},
             upsert=True,
         )
         await message.reply_text(
@@ -346,7 +337,8 @@ async def del_video_cmd(client, message):
         await message.reply_text("❌ Invalid number.", parse_mode=enums.ParseMode.HTML)
         return
 
-    all_vids = await videos.find({}, {"_id": 1}).to_list(length=None)
+    # Fix: sort by added_at নিশ্চিত করে ইনডেক্স সবসময় একই থাকে
+    all_vids = await videos.find({}, {"_id": 1}).sort("added_at", 1).to_list(length=None)
     if index < 0 or index >= len(all_vids):
         await message.reply_text(
             f"⚠️ No video at position {index + 1}. Total: {len(all_vids)}",
@@ -368,11 +360,6 @@ async def del_video_cmd(client, message):
 
 @Client.on_message(filters.command("addlimit") & filters.user(ADMIN_IDS))
 async def addlimit_cmd(client, message):
-    """
-    /addlimit <user_id> <amount>
-    Decreases the user's video_count by <amount>, effectively giving them that
-    many extra videos in the current 12-hour window.
-    """
     if len(message.command) < 3:
         await message.reply_text(
             "❌ <b>Usage:</b> <code>/addlimit &lt;user_id&gt; &lt;amount&gt;</code>\n\n"
@@ -402,7 +389,7 @@ async def addlimit_cmd(client, message):
         return
 
     old_count = user.get("video_count", 0)
-    new_count = max(0, old_count - amount)          # can't go below 0
+    new_count = max(0, old_count - amount)
     await users.update_one(
         {"user_id": target_id},
         {"$set": {"video_count": new_count, "video_window_start": get_current_window_start()}},
@@ -418,10 +405,9 @@ async def addlimit_cmd(client, message):
         f"👤 {name} | {uname} | <code>{target_id}</code>\n"
         f"➕ Added: <b>+{amount}</b> videos\n"
         f"📊 Before: {remaining_before} remaining → After: <b>{remaining_after} remaining</b>\n"
-        f"🕐 {datetime.utcnow().strftime('%d %b %Y, %I:%M %p UTC')}"
+        f"🕐 {datetime.now(timezone.utc).strftime('%d %b %Y, %I:%M %p UTC')}"
     )
 
-    # Notify monitor group
     try:
         await client.send_message(
             chat_id=LOG_GROUP_ID,
@@ -431,7 +417,6 @@ async def addlimit_cmd(client, message):
     except Exception:
         pass
 
-    # Notify the user
     try:
         await client.send_message(
             chat_id=target_id,
@@ -496,7 +481,6 @@ async def broadcast_cmd(client, message):
 
     success = failed = 0
 
-    # ── Send to all individual users
     for user_doc in all_users:
         try:
             await client.copy_message(
@@ -507,9 +491,9 @@ async def broadcast_cmd(client, message):
             success += 1
         except Exception:
             failed += 1
-        await asyncio.sleep(0.05)
+        # Fix: 0.05 → 0.1 সেকেন্ড বিরতি (Telegram rate limit সহ্য করতে)
+        await asyncio.sleep(0.1)
 
-    # ── Send to all groups
     g_success = g_failed = 0
     for group_doc in all_group_docs:
         try:
@@ -521,7 +505,7 @@ async def broadcast_cmd(client, message):
             g_success += 1
         except Exception:
             g_failed += 1
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.1)
 
     await status_msg.edit_text(
         "✅ <b>Broadcast complete!</b>\n\n"

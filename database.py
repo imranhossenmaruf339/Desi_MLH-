@@ -1,5 +1,12 @@
+import sys
 import motor.motor_asyncio
 from config import MONGO_URI
+
+# MONGO_URI ছাড়া বট চালু হবে না — config.py-তে আগেই চেক হয়
+# তবুও এখানে double-check রাখা হলো
+if not MONGO_URI:
+    print("[ERROR] MONGO_URI সেট করা নেই। বট বন্ধ হচ্ছে।")
+    sys.exit(1)
 
 client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
 db = client["UnityBot"]
