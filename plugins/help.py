@@ -1,4 +1,5 @@
 from pyrogram import Client, filters, enums
+from config import VIDEO_DAILY_LIMIT
 
 
 @Client.on_message(filters.command("help"))
@@ -9,7 +10,7 @@ async def help_cmd(client, message):
         "/help — Show this menu\n"
         "/profile — Your profile & stats\n"
         "/video — Get a random video 🎬\n\n"
-        "🕐 Video limit: <b>10 per 12 hours</b>\n"
-        "Resets at 12:00 AM &amp; 12:00 PM UTC daily.",
+        f"🕐 Video limit: <b>{VIDEO_DAILY_LIMIT} per 12 hours</b>\n"
+        "Resets at 12:00 AM & 12:00 PM UTC daily.",
         parse_mode=enums.ParseMode.HTML,
     )
