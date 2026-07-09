@@ -1,0 +1,58 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "python3 bot.py",
+    "restartPolicyType": "ON_FAILURE",
+    "serviceName": "telegram-video-bot"
+  },
+  "vars": {
+    "BOT_TOKEN": {
+      "description": "Your Telegram Bot Token from @BotFather",
+      "required": true
+    },
+    "API_ID": {
+      "description": "Your Telegram API ID from my.telegram.org",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Your Telegram API Hash from my.telegram.org",
+      "required": true
+    },
+    "OWNER_ID": {
+      "description": "Your Telegram User ID (numeric)",
+      "required": true
+    },
+    "MONGO_URI": {
+      "description": "Your MongoDB Atlas connection string",
+      "required": true
+    },
+    "LOG_GROUP_ID": {
+      "description": "ID of the group where logs will be sent (negative number)",
+      "required": true
+    },
+    "VIDEO_CHANNEL_ID": {
+      "description": "ID of the channel to index videos from (negative number)",
+      "required": true
+    },
+    "VIP_CHANNEL_ID": {
+      "description": "ID of the VIP channel for limit unlocks (optional)",
+      "required": false
+    },
+    "VIDEO_DAILY_LIMIT": {
+      "description": "Number of videos per 12-hour window (default: 10)",
+      "required": false,
+      "defaultValue": "10"
+    },
+    "JOIN_CHANNEL_LINK": {
+      "description": "Main channel join link",
+      "required": false
+    },
+    "VIP_CHANNEL_LINK": {
+      "description": "VIP channel join link",
+      "required": false
+    }
+  }
+}
