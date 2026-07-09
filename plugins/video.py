@@ -265,9 +265,9 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
                 )
                 return False, str(e)
 
-    # ── Auto-delete after 30 minutes ─────────────────────────────────────────
+    # ── Auto-delete after 24 hours (PM) ──────────────────────────────────────
     if sent:
-        asyncio.create_task(_delete_after(client, chat_id, sent.id, delay=1800))
+        asyncio.create_task(_delete_after(client, chat_id, sent.id, delay=86400))
 
     # ── Fix: Atomic counter increment — race condition রোধ করতে $inc ব্যবহার ──
     # আগে: read → compute → write (দুটো request একসাথে এলে একই count পড়তো)

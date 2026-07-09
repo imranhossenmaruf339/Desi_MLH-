@@ -44,3 +44,9 @@ async def ensure_indexes():
     )
     # Users lookup by user_id
     await users.create_index([("user_id", 1)], unique=True, name="users_uid")
+    # Duplicate video check — file_unique_id দিয়ে দ্রুত খোঁজা
+    await videos.create_index(
+        [("file_unique_id", 1)],
+        sparse=True,
+        name="videos_unique_id",
+    )

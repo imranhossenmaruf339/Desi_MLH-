@@ -112,53 +112,94 @@ async def _notify_users_videos_available(client):
             pass
 
 
-# ─── Auto-capture videos posted directly to the channel ──────────────────────
+# ─── যেকোনো গ্রুপ/চ্যানেল থেকে ভিডিও অটো-সেভ ─────────────────────────────────
+# শর্ত: (১) ডাটাবেজে নেই, (২) ৩ মিনিটের বেশি (VIDEO_CHANNEL_ID হলে যেকোনো দৈর্ঘ্য)
 
-@Client.on_message(filters.chat(VIDEO_CHANNEL_ID))
+@Client.on_message(filters.group | filters.channel)
 async def auto_index_new_video(client, message):
-    """Save file_id when a video is posted to the channel."""
-    file_id = None
-    file_type = "video"
+    """যেকোনো গ্রুপ/চ্যানেলে শেয়ার হওয়া ভিডিও DB-তে সেভ করো।"""
+    from config import SUPPORT_GROUP_ID
+
+    # LOG গ্রুপ ও সাপোর্ট গ্রুপ থেকে সেভ করবো না
+    if message.chat.id in (LOG_GROUP_ID, SUPPORT_GROUP_ID):
+        return
+
+    file_id        = None
+    file_unique_id = None
+    file_type      = "video"
     duration = width = height = 0
+    is_video_channel = (message.chat.id == VIDEO_CHANNEL_ID)
 
     if message.video:
-        v = message.video
-        file_id = v.file_id
-        duration = v.duration or 0
-        width = v.width or 0
-        height = v.height or 0
+        v              = message.video
+        file_id        = v.file_id
+        file_unique_id = v.file_unique_id
+        duration       = v.duration or 0
+        width          = v.width or 0
+        height         = v.height or 0
 
     elif (
         message.document
         and message.document.mime_type
         and message.document.mime_type.startswith("video/")
     ):
+        file_unique_id = message.document.file_unique_id
         try:
             tmp = await client.send_video(
                 chat_id=LOG_GROUP_ID,
                 video=message.document.file_id,
                 caption="",
             )
-            file_id = tmp.video.file_id
+            file_id  = tmp.video.file_id
             duration = tmp.video.duration or 0
-            width = tmp.video.width or 0
-            height = tmp.video.height or 0
+            width    = tmp.video.width or 0
+            height   = tmp.video.height or 0
             await tmp.delete()
         except Exception:
-            file_id = message.document.file_id
+            file_id   = message.document.file_id
             file_type = "document"
     else:
         return
 
+    # VIDEO_CHANNEL ছাড়া অন্য জায়গা থেকে শুধু ৩ মিনিটের বেশি ভিডিও নেবো
+    if not is_video_channel and duration < 180:
+        return
+
+    # ইতিমধ্যে DB-তে আছে কিনা চেক করো (file_unique_id দিয়ে)
+    if file_unique_id:
+        existing = await videos.find_one({"file_unique_id": file_unique_id})
+        if existing:
+            return  # ডুপ্লিকেট — স্কিপ
+
     await videos.insert_one({
-        "file_id": file_id,
-        "file_type": file_type,
-        "caption": message.caption or "",
-        "duration": duration,
-        "width": width,
-        "height": height,
-        "added_at": datetime.now(timezone.utc),
+        "file_id":        file_id,
+        "file_unique_id": file_unique_id,
+        "file_type":      file_type,
+        "caption":        message.caption or "",
+        "duration":       duration,
+        "width":          width,
+        "height":         height,
+        "source_chat":    message.chat.id,
+        "added_at":       datetime.now(timezone.utc),
     })
+
+    # শুধু non-video-channel সেভের জন্য লগ দাও
+    if not is_video_channel:
+        try:
+            mins = duration // 60
+            secs = duration % 60
+            await client.send_message(
+                chat_id=LOG_GROUP_ID,
+                text=(
+                    "🎬 <b>নতুন ভিডিও অটো-সেভ হয়েছে</b>\n\n"
+                    f"📌 গ্রুপ/চ্যানেল: <b>{message.chat.title or message.chat.id}</b>\n"
+                    f"⏱ দৈর্ঘ্য: <b>{mins}:{secs:02d}</b>\n"
+                    f"📦 মোট ভিডিও: <b>{await videos.count_documents({})}</b>"
+                ),
+                parse_mode=enums.ParseMode.HTML,
+            )
+        except Exception:
+            pass
 
 
 # ─── /fixvideos — re-process document-type videos for spoiler support ────────
@@ -434,16 +475,63 @@ async def addlimit_cmd(client, message):
     await message.reply_text(confirmation, parse_mode=enums.ParseMode.HTML)
 
 
-# ─── /stats ───────────────────────────────────────────────────────────────────
+# ─── /stats · /dashboard — বিস্তারিত পরিসংখ্যান ──────────────────────────────
 
-@Client.on_message(filters.command("stats") & filters.user(ADMIN_IDS))
+@Client.on_message(filters.command(["stats", "dashboard"]) & filters.user(ADMIN_IDS))
 async def stats_cmd(client, message):
-    total_users = await users.count_documents({})
-    total_videos = await videos.count_documents({})
+    from datetime import timedelta
+    from database import user_video_history, group_video_stats, support_msgs
+
+    now = datetime.now(timezone.utc)
+    last_24h = now - timedelta(hours=24)
+    last_12h = now - timedelta(hours=12)
+
+    # সব তথ্য একসাথে fetch করো
+    total_users    = await users.count_documents({})
+    active_24h     = await users.count_documents({"joined_at": {"$gte": last_24h}})
+    new_today      = await users.count_documents({"joined_at": {"$gte": last_24h}})
+
+    total_videos   = await videos.count_documents({})
+    sent_24h       = await user_video_history.count_documents({"sent_at": {"$gte": last_24h}})
+    sent_12h       = await user_video_history.count_documents({"sent_at": {"$gte": last_12h}})
+
+    total_groups   = await groups.count_documents({})
+    total_support  = await support_msgs.count_documents({})
+    pending_sup    = await support_msgs.count_documents({"replied": {"$ne": True}})
+
+    # সর্বাধিক ভিডিও দেখা ইউজার
+    top_cursor = user_video_history.aggregate([
+        {"$group": {"_id": "$user_id", "count": {"$sum": 1}}},
+        {"$sort":  {"count": -1}},
+        {"$limit": 1},
+    ])
+    top_list = await top_cursor.to_list(length=1)
+    if top_list:
+        top_uid   = top_list[0]["_id"]
+        top_count = top_list[0]["count"]
+        top_user  = await users.find_one({"user_id": top_uid})
+        top_name  = (top_user or {}).get("first_name") or f"ID:{top_uid}"
+    else:
+        top_name, top_count = "—", 0
+
     await message.reply_text(
-        "📊 <b>Bot Stats</b>\n\n"
-        f"👥 Total users: <b>{total_users}</b>\n"
-        f"🎬 Videos in DB: <b>{total_videos}</b>",
+        "📊 <b>Admin Dashboard</b>\n"
+        "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n"
+        "👥 <b>ইউজার:</b>\n"
+        f"  • মোট: <b>{total_users:,}</b>\n"
+        f"  • আজকের নতুন: <b>{new_today:,}</b>\n\n"
+        "🎬 <b>ভিডিও:</b>\n"
+        f"  • DB-তে মোট: <b>{total_videos:,}</b>\n"
+        f"  • শেষ ১২ ঘন্টায় পাঠানো: <b>{sent_12h:,}</b>\n"
+        f"  • শেষ ২৪ ঘন্টায় পাঠানো: <b>{sent_24h:,}</b>\n\n"
+        "🏘 <b>গ্রুপ:</b>\n"
+        f"  • মোট: <b>{total_groups:,}</b>\n\n"
+        "📩 <b>সাপোর্ট ইনবক্স:</b>\n"
+        f"  • মোট মেসেজ: <b>{total_support:,}</b>\n"
+        f"  • অপেক্ষায়: <b>{pending_sup:,}</b>\n\n"
+        "🏆 <b>সর্বাধিক ভিডিও দেখা:</b>\n"
+        f"  • {top_name} — <b>{top_count:,}টি</b>\n\n"
+        f"🕐 আপডেট: {now.strftime('%d %b %Y, %I:%M %p')} UTC",
         parse_mode=enums.ParseMode.HTML,
     )
 
