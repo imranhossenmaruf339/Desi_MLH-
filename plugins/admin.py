@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 
-from pyrogram import Client, filters, enums
+from pyrogram import Client, filters, enums, ContinuePropagation
 
 from config import ADMIN_IDS, VIDEO_CHANNEL_ID, LOG_GROUP_ID, VIDEO_DAILY_LIMIT, GROUP_VIDEO_LIMIT, OWNER_ID
 from database import users, videos, groups
@@ -115,14 +115,23 @@ async def _notify_users_videos_available(client):
 # ─── যেকোনো গ্রুপ/চ্যানেল থেকে ভিডিও অটো-সেভ ─────────────────────────────────
 # শর্ত: (১) ডাটাবেজে নেই, (২) ৩ মিনিটের বেশি (VIDEO_CHANNEL_ID হলে যেকোনো দৈর্ঘ্য)
 
-@Client.on_message(filters.group | filters.channel)
+@Client.on_message(
+    (filters.group | filters.channel)
+    & (filters.video | filters.document)
+)
 async def auto_index_new_video(client, message):
-    """যেকোনো গ্রুপ/চ্যানেলে শেয়ার হওয়া ভিডিও DB-তে সেভ করো।"""
+    """যেকোনো গ্রুপ/চ্যানেলে শেয়ার হওয়া ভিডিও DB-তে সেভ করো।
+    
+    গুরুত্বপূর্ণ: এই হ্যান্ডলার শুধু video ও document মেসেজ ধরে।
+    Text/command মেসেজ এখানে আসে না — তাই /video, /stats সব কমান্ড
+    তাদের নিজস্ব হ্যান্ডলারে ঠিকমতো পৌঁছায়।
+    """
     from config import SUPPORT_GROUP_ID
 
-    # LOG গ্রুপ ও সাপোর্ট গ্রুপ থেকে সেভ করবো না
+    # LOG গ্রুপ ও সাপোর্ট গ্রুপের ভিডিও সেভ করবো না —
+    # ContinuePropagation দিয়ে অন্য হ্যান্ডলারকে সুযোগ দাও
     if message.chat.id in (LOG_GROUP_ID, SUPPORT_GROUP_ID):
-        return
+        raise ContinuePropagation()
 
     file_id        = None
     file_unique_id = None
@@ -159,7 +168,7 @@ async def auto_index_new_video(client, message):
             file_id   = message.document.file_id
             file_type = "document"
     else:
-        return
+        raise ContinuePropagation()
 
     # VIDEO_CHANNEL ছাড়া অন্য জায়গা থেকে শুধু ৩ মিনিটের বেশি ভিডিও নেবো
     if not is_video_channel and duration < 180:

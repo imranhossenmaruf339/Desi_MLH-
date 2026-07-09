@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 
 
@@ -35,3 +36,21 @@ async def schedule_delete(client, chat_id: int, message_id: int, delay: int = 30
         await client.delete_messages(chat_id, message_id)
     except Exception:
         pass
+
+
+# ─── Rate Limiter (প্রতি ইউজারের জন্য) ──────────────────────────────────────
+# In-memory dict: user_id → last command timestamp
+_rate_limit_map: dict[int, float] = {}
+
+def is_rate_limited(user_id: int, cooldown: float = 3.0) -> float:
+    """
+    ইউজার rate limited কিনা চেক করো।
+    Returns 0.0 যদি allowed, বাকি সময় (seconds) যদি blocked।
+    """
+    now_ts = time.monotonic()
+    last = _rate_limit_map.get(user_id, 0.0)
+    remaining = cooldown - (now_ts - last)
+    if remaining > 0:
+        return remaining  # এখনো wait করতে হবে
+    _rate_limit_map[user_id] = now_ts
+    return 0.0

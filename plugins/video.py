@@ -8,7 +8,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, GROUP_VIDEO_LIMIT, ADMIN_IDS, LOG_GROUP_ID, VIP_CHANNEL_ID
 from database import users, videos, user_video_history, groups, group_video_stats
-from helpers import get_current_window_start, schedule_delete
+from helpers import get_current_window_start, schedule_delete, is_rate_limited
 
 
 async def _log(client, text: str):
@@ -324,6 +324,16 @@ async def video_cmd(client, message):
     user_id = message.from_user.id
     in_group = message.chat.type != enums.ChatType.PRIVATE
 
+    # ── Rate limit: PM-এ প্রতি ৩ সেকেন্ডে ১টি কমান্ড ────────────────────────
+    if not in_group and user_id not in ADMIN_IDS:
+        wait = is_rate_limited(user_id, cooldown=3.0)
+        if wait > 0:
+            await message.reply_text(
+                f"⏳ একটু ধীরে! <b>{wait:.1f} সেকেন্ড</b> পর আবার চেষ্টা করুন।",
+                parse_mode=enums.ParseMode.HTML,
+            )
+            return
+
     # ── Auto-register group ───────────────────────────────────────────────────
     if in_group:
         await groups.update_one(
@@ -477,6 +487,16 @@ async def next_video_callback(client, callback_query):
             show_alert=True,
         )
         return
+
+    # ── Rate limit (button spam রোধ করতে) ────────────────────────────────────
+    if user_id not in ADMIN_IDS:
+        wait = is_rate_limited(user_id, cooldown=3.0)
+        if wait > 0:
+            await callback_query.answer(
+                f"⏳ একটু ধীরে! {wait:.1f} সেকেন্ড পর আবার চেষ্টা করুন।",
+                show_alert=True,
+            )
+            return
 
     await callback_query.answer("⏳ পাঠাচ্ছি...")
     success, reason = await deliver_video(client, user_id, chat_id)
