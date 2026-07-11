@@ -20,7 +20,7 @@ LOG_GROUP_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 
 JOIN_CHANNEL_LINK = os.getenv("VIP_CHANNEL1_LINK", "https://t.me/+YTZcUp9h0qYwNjc1")
 
-# Fix: .env-এ VIP_CHANNEL_LINK নামে সেট করুন (আগে VIP_CHANNEL2_LINK ছিল — ভুল নাম)
+# Note: set this as VIP_CHANNEL_LINK in .env (previously named VIP_CHANNEL2_LINK — wrong name)
 VIP_CHANNEL_LINK = os.getenv("VIP_CHANNEL_LINK", "https://t.me/+ob96Z-mZmjBjNGQ1")
 
 # VIP_CHANNEL_ID is needed for membership check
@@ -33,8 +33,8 @@ except (ValueError, TypeError):
 JOIN_CHANNEL_2_LINK     = os.getenv("JOIN_CHANNEL_2_LINK", "https://t.me/the_couple_vibe")
 JOIN_CHANNEL_2_USERNAME = os.getenv("JOIN_CHANNEL_2_USERNAME", "the_couple_vibe")
 VIDEO_DAILY_LIMIT = int(os.getenv("VIDEO_DAILY_LIMIT", "10"))
-GROUP_VIDEO_LIMIT = int(os.getenv("GROUP_VIDEO_LIMIT", "5"))   # গ্রুপে প্রতি ইউজার প্রতি 12 ঘন্টায় সর্বোচ্চ ভিডিও
-SUPPORT_GROUP_ID  = int(os.getenv("SUPPORT_GROUP_ID", "-1003876863435"))  # সাপোর্ট ইনবক্স গ্রুপ
+GROUP_VIDEO_LIMIT = int(os.getenv("GROUP_VIDEO_LIMIT", "5"))   # max videos per user per group per 12h window
+SUPPORT_GROUP_ID  = int(os.getenv("SUPPORT_GROUP_ID", "-1003876863435"))  # support inbox group
 
 # ── Required variable validation ─────────────────────────────────────────────
 _missing = []
@@ -48,6 +48,20 @@ if not ADMIN_IDS:
     _missing.append("ADMIN_ID")
 
 if _missing:
-    print(f"[ERROR] এই environment variable(s) সেট করা নেই: {', '.join(_missing)}")
-    print("[ERROR] .env ফাইল বা deployment platform-এ variable গুলো সেট করুন।")
+    print(f"[ERROR] Missing required environment variable(s): {', '.join(_missing)}")
+    print("[ERROR] Set these variables in your .env file or deployment platform.")
     sys.exit(1)
+
+# ── Diagnostics: warn loudly (in Railway logs) if monitor/support IDs look wrong ──
+if LOG_GROUP_ID == 0:
+    print(
+        "[WARNING] LOG_CHANNEL_ID is not set (defaulting to 0). "
+        "The bot CANNOT send monitor-group notifications (new video added, "
+        "who watched, limit reached, etc.) until this is set correctly in your "
+        "deployment platform's environment variables."
+    )
+if SUPPORT_GROUP_ID == 0:
+    print(
+        "[WARNING] SUPPORT_GROUP_ID is not set (defaulting to 0). "
+        "The support inbox forwarding feature will not work until this is set."
+    )

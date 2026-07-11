@@ -4,12 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 
 def now():
-    # Fix: datetime.utcnow() Python 3.12-এ deprecated — timezone-aware ব্যবহার করুন
+    # Fix: datetime.utcnow() is deprecated on Python 3.12 — use timezone-aware instead
     return datetime.now(timezone.utc)
 
 
 def utcnow():
-    """UTC সময় timezone-aware ফরম্যাটে।"""
+    """Current UTC time, timezone-aware."""
     return datetime.now(timezone.utc)
 
 
@@ -30,7 +30,7 @@ def get_current_window_start():
 
 
 async def schedule_delete(client, chat_id: int, message_id: int, delay: int = 30):
-    """Delete a message after `delay` seconds (default 30 s). Silently ignores errors."""
+    """Delete a message after `delay` seconds (default 30s). Silently ignores errors."""
     await asyncio.sleep(delay)
     try:
         await client.delete_messages(chat_id, message_id)
@@ -38,19 +38,46 @@ async def schedule_delete(client, chat_id: int, message_id: int, delay: int = 30
         pass
 
 
-# ─── Rate Limiter (প্রতি ইউজারের জন্য) ──────────────────────────────────────
-# In-memory dict: user_id → last command timestamp
+# ─── Rate Limiter (per user) ─────────────────────────────────────────────────
+# In-memory dict: user_id -> last command timestamp
 _rate_limit_map: dict[int, float] = {}
 
 def is_rate_limited(user_id: int, cooldown: float = 3.0) -> float:
     """
-    ইউজার rate limited কিনা চেক করো।
-    Returns 0.0 যদি allowed, বাকি সময় (seconds) যদি blocked।
+    Check whether a user is currently rate limited.
+    Returns 0.0 if allowed, or the remaining wait time (seconds) if blocked.
     """
     now_ts = time.monotonic()
     last = _rate_limit_map.get(user_id, 0.0)
     remaining = cooldown - (now_ts - last)
     if remaining > 0:
-        return remaining  # এখনো wait করতে হবে
+        return remaining  # still need to wait
     _rate_limit_map[user_id] = now_ts
     return 0.0
+
+
+async def get_caption_with_media_group_fallback(client, message) -> str:
+    """
+    Return the caption for a message, falling back to the caption of the other
+    items in the same media group (album) if this particular message has none.
+
+    Telegram albums only attach the caption to ONE message in the group — if the
+    handler happens to process a different item first, message.caption is empty
+    even though the album clearly "has" a caption. Without this fallback, videos
+    auto-saved from albums silently lose their caption.
+    """
+    if message.caption:
+        return message.caption
+
+    if not message.media_group_id:
+        return ""
+
+    try:
+        group_messages = await client.get_media_group(message.chat.id, message.id)
+        for gm in group_messages:
+            if gm.caption:
+                return gm.caption
+    except Exception:
+        pass
+
+    return ""

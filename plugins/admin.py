@@ -5,7 +5,14 @@ from pyrogram import Client, filters, enums, ContinuePropagation
 
 from config import ADMIN_IDS, VIDEO_CHANNEL_ID, LOG_GROUP_ID, VIDEO_DAILY_LIMIT, GROUP_VIDEO_LIMIT, OWNER_ID
 from database import users, videos, groups
-from helpers import get_current_window_start
+from helpers import get_current_window_start, get_caption_with_media_group_fallback
+
+
+def _log_error(context: str, exc: Exception):
+    """Print monitor-group send failures to stdout so they show up in deployment
+    logs instead of failing completely silently — this is the main way to
+    diagnose a misconfigured LOG_CHANNEL_ID."""
+    print(f"[LOG-SEND-FAILED] {context}: {exc!r}")
 
 
 # ─── Admin sends/forwards any video to the bot PM → auto-save ────────────────
@@ -24,7 +31,7 @@ async def admin_save_video(client, message):
     file_id = None
     file_type = "video"
     duration = width = height = 0
-    caption = message.caption or ""
+    caption = await get_caption_with_media_group_fallback(client, message)
 
     if message.video:
         v = message.video
@@ -84,16 +91,19 @@ async def admin_save_video(client, message):
             ),
             parse_mode=enums.ParseMode.HTML,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        _log_error("admin_save_video new-video notice", e)
 
-    await message.reply_text("✅ Saved.", parse_mode=enums.ParseMode.HTML)
+    await message.reply_text(
+        f"✅ Saved. Total videos in library: <b>{total}</b>",
+        parse_mode=enums.ParseMode.HTML,
+    )
 
 
 async def _notify_users_videos_available(client):
     """Notify all users that the video library is now available.
-    Fix: rate limiting রোধ করতে প্রতি মেসেজের পর পর্যাপ্ত বিরতি রাখা হয়েছে।
-    Telegram প্রতি সেকেন্ডে সর্বোচ্চ ~30 মেসেজ পাঠাতে দেয়।
+    Rate limiting: a short delay is kept between messages since Telegram
+    allows at most ~30 messages/second.
     """
     all_users = await users.find({}, {"user_id": 1}).to_list(length=None)
     for u in all_users:
@@ -106,30 +116,30 @@ async def _notify_users_videos_available(client):
                 ),
                 parse_mode=enums.ParseMode.HTML,
             )
-            # Fix: 0.05 → 0.1 সেকেন্ড বিরতি (Telegram rate limit সহ্য করতে)
             await asyncio.sleep(0.1)
         except Exception:
             pass
 
 
-# ─── যেকোনো গ্রুপ/চ্যানেল থেকে ভিডিও অটো-সেভ ─────────────────────────────────
-# শর্ত: (১) ডাটাবেজে নেই, (২) ৩ মিনিটের বেশি (VIDEO_CHANNEL_ID হলে যেকোনো দৈর্ঘ্য)
+# ─── Auto-save videos shared in ANY group/channel ─────────────────────────────
+# Conditions: (1) not already in DB, (2) longer than 3 minutes (any length if
+# it comes from VIDEO_CHANNEL_ID, the main source channel)
 
 @Client.on_message(
     (filters.group | filters.channel)
     & (filters.video | filters.document)
 )
 async def auto_index_new_video(client, message):
-    """যেকোনো গ্রুপ/চ্যানেলে শেয়ার হওয়া ভিডিও DB-তে সেভ করো।
-    
-    গুরুত্বপূর্ণ: এই হ্যান্ডলার শুধু video ও document মেসেজ ধরে।
-    Text/command মেসেজ এখানে আসে না — তাই /video, /stats সব কমান্ড
-    তাদের নিজস্ব হ্যান্ডলারে ঠিকমতো পৌঁছায়।
+    """Save any video shared in a group/channel into the DB.
+
+    Important: this handler only matches video/document messages.
+    Text/command messages never reach here — so /video, /stats, and all
+    other commands correctly reach their own handlers.
     """
     from config import SUPPORT_GROUP_ID
 
-    # LOG গ্রুপ ও সাপোর্ট গ্রুপের ভিডিও সেভ করবো না —
-    # ContinuePropagation দিয়ে অন্য হ্যান্ডলারকে সুযোগ দাও
+    # Don't save videos posted in the LOG group or support group —
+    # use ContinuePropagation so the next matching handler still runs.
     if message.chat.id in (LOG_GROUP_ID, SUPPORT_GROUP_ID):
         raise ContinuePropagation()
 
@@ -170,21 +180,26 @@ async def auto_index_new_video(client, message):
     else:
         raise ContinuePropagation()
 
-    # VIDEO_CHANNEL ছাড়া অন্য জায়গা থেকে শুধু ৩ মিনিটের বেশি ভিডিও নেবো
+    # Only accept videos longer than 3 minutes, unless it's the main source channel
     if not is_video_channel and duration < 180:
         return
 
-    # ইতিমধ্যে DB-তে আছে কিনা চেক করো (file_unique_id দিয়ে)
+    # Skip duplicates already in DB (matched by file_unique_id)
     if file_unique_id:
         existing = await videos.find_one({"file_unique_id": file_unique_id})
         if existing:
-            return  # ডুপ্লিকেট — স্কিপ
+            return
+
+    # Fix: fetch caption with media-group (album) fallback — Telegram only
+    # attaches the caption to ONE message of an album, so a video posted as
+    # part of a multi-video album could otherwise be saved with no caption.
+    caption_text = await get_caption_with_media_group_fallback(client, message)
 
     await videos.insert_one({
         "file_id":        file_id,
         "file_unique_id": file_unique_id,
         "file_type":      file_type,
-        "caption":        message.caption or "",
+        "caption":        caption_text,
         "duration":       duration,
         "width":          width,
         "height":         height,
@@ -192,23 +207,26 @@ async def auto_index_new_video(client, message):
         "added_at":       datetime.now(timezone.utc),
     })
 
-    # শুধু non-video-channel সেভের জন্য লগ দাও
-    if not is_video_channel:
-        try:
-            mins = duration // 60
-            secs = duration % 60
-            await client.send_message(
-                chat_id=LOG_GROUP_ID,
-                text=(
-                    "🎬 <b>নতুন ভিডিও অটো-সেভ হয়েছে</b>\n\n"
-                    f"📌 গ্রুপ/চ্যানেল: <b>{message.chat.title or message.chat.id}</b>\n"
-                    f"⏱ দৈর্ঘ্য: <b>{mins}:{secs:02d}</b>\n"
-                    f"📦 মোট ভিডিও: <b>{await videos.count_documents({})}</b>"
-                ),
-                parse_mode=enums.ParseMode.HTML,
-            )
-        except Exception:
-            pass
+    # Always notify the monitor group, including for the main source channel —
+    # previously this was skipped for the main channel, which is why "new video
+    # saved" notifications appeared to be missing.
+    try:
+        mins = duration // 60
+        secs = duration % 60
+        source_label = "Main source channel" if is_video_channel else (message.chat.title or str(message.chat.id))
+        await client.send_message(
+            chat_id=LOG_GROUP_ID,
+            text=(
+                "🎬 <b>New Video Auto-Saved</b>\n\n"
+                f"📌 Source: <b>{source_label}</b>\n"
+                f"⏱ Duration: <b>{mins}:{secs:02d}</b>\n"
+                f"📝 Caption: {caption_text or '—'}\n"
+                f"📦 Total videos in DB: <b>{await videos.count_documents({})}</b>"
+            ),
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception as e:
+        _log_error("auto_index_new_video notice", e)
 
 
 # ─── /fixvideos — re-process document-type videos for spoiler support ────────
@@ -387,7 +405,7 @@ async def del_video_cmd(client, message):
         await message.reply_text("❌ Invalid number.", parse_mode=enums.ParseMode.HTML)
         return
 
-    # Fix: sort by added_at নিশ্চিত করে ইনডেক্স সবসময় একই থাকে
+    # Sort by added_at so the index always stays consistent
     all_vids = await videos.find({}, {"_id": 1}).sort("added_at", 1).to_list(length=None)
     if index < 0 or index >= len(all_vids):
         await message.reply_text(
@@ -464,17 +482,17 @@ async def addlimit_cmd(client, message):
             text=f"🔓 <b>Admin Added Limit</b>\n\n{confirmation}",
             parse_mode=enums.ParseMode.HTML,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        _log_error("addlimit_cmd notice", e)
 
     try:
         await client.send_message(
             chat_id=target_id,
             text=(
-                f"🎁 <b>আপনার লিমিট বাড়ানো হয়েছে!</b>\n\n"
-                f"অ্যাডমিন আপনাকে আরও <b>{amount}টি</b> ভিডিও দিয়েছেন। 🎬\n"
-                f"এখন আপনার কাছে আরও <b>{remaining_after}টি</b> ভিডিও বাকি আছে।\n\n"
-                f"উপভোগ করুন! /video"
+                f"🎁 <b>Your limit has been increased!</b>\n\n"
+                f"The admin has given you <b>{amount} more</b> videos! 🎬\n"
+                f"You now have <b>{remaining_after}</b> videos remaining.\n\n"
+                f"Enjoy! /video"
             ),
             parse_mode=enums.ParseMode.HTML,
         )
@@ -484,7 +502,7 @@ async def addlimit_cmd(client, message):
     await message.reply_text(confirmation, parse_mode=enums.ParseMode.HTML)
 
 
-# ─── /stats · /dashboard — বিস্তারিত পরিসংখ্যান ──────────────────────────────
+# ─── /stats · /dashboard — detailed statistics ────────────────────────────────
 
 @Client.on_message(filters.command(["stats", "dashboard"]) & filters.user(ADMIN_IDS))
 async def stats_cmd(client, message):
@@ -495,7 +513,7 @@ async def stats_cmd(client, message):
     last_24h = now - timedelta(hours=24)
     last_12h = now - timedelta(hours=12)
 
-    # সব তথ্য একসাথে fetch করো
+    # Fetch all stats together
     total_users    = await users.count_documents({})
     active_24h     = await users.count_documents({"joined_at": {"$gte": last_24h}})
     new_today      = await users.count_documents({"joined_at": {"$gte": last_24h}})
@@ -508,7 +526,7 @@ async def stats_cmd(client, message):
     total_support  = await support_msgs.count_documents({})
     pending_sup    = await support_msgs.count_documents({"replied": {"$ne": True}})
 
-    # সর্বাধিক ভিডিও দেখা ইউজার
+    # Most-active user by videos watched
     top_cursor = user_video_history.aggregate([
         {"$group": {"_id": "$user_id", "count": {"$sum": 1}}},
         {"$sort":  {"count": -1}},
@@ -526,21 +544,21 @@ async def stats_cmd(client, message):
     await message.reply_text(
         "📊 <b>Admin Dashboard</b>\n"
         "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n"
-        "👥 <b>ইউজার:</b>\n"
-        f"  • মোট: <b>{total_users:,}</b>\n"
-        f"  • আজকের নতুন: <b>{new_today:,}</b>\n\n"
-        "🎬 <b>ভিডিও:</b>\n"
-        f"  • DB-তে মোট: <b>{total_videos:,}</b>\n"
-        f"  • শেষ ১২ ঘন্টায় পাঠানো: <b>{sent_12h:,}</b>\n"
-        f"  • শেষ ২৪ ঘন্টায় পাঠানো: <b>{sent_24h:,}</b>\n\n"
-        "🏘 <b>গ্রুপ:</b>\n"
-        f"  • মোট: <b>{total_groups:,}</b>\n\n"
-        "📩 <b>সাপোর্ট ইনবক্স:</b>\n"
-        f"  • মোট মেসেজ: <b>{total_support:,}</b>\n"
-        f"  • অপেক্ষায়: <b>{pending_sup:,}</b>\n\n"
-        "🏆 <b>সর্বাধিক ভিডিও দেখা:</b>\n"
-        f"  • {top_name} — <b>{top_count:,}টি</b>\n\n"
-        f"🕐 আপডেট: {now.strftime('%d %b %Y, %I:%M %p')} UTC",
+        "👥 <b>Users:</b>\n"
+        f"  • Total: <b>{total_users:,}</b>\n"
+        f"  • New today: <b>{new_today:,}</b>\n\n"
+        "🎬 <b>Videos:</b>\n"
+        f"  • Total in DB: <b>{total_videos:,}</b>\n"
+        f"  • Sent in last 12h: <b>{sent_12h:,}</b>\n"
+        f"  • Sent in last 24h: <b>{sent_24h:,}</b>\n\n"
+        "🏘 <b>Groups:</b>\n"
+        f"  • Total: <b>{total_groups:,}</b>\n\n"
+        "📩 <b>Support Inbox:</b>\n"
+        f"  • Total messages: <b>{total_support:,}</b>\n"
+        f"  • Pending: <b>{pending_sup:,}</b>\n\n"
+        "🏆 <b>Most videos watched:</b>\n"
+        f"  • {top_name} — <b>{top_count:,}</b>\n\n"
+        f"🕐 Updated: {now.strftime('%d %b %Y, %I:%M %p')} UTC",
         parse_mode=enums.ParseMode.HTML,
     )
 
@@ -588,7 +606,6 @@ async def broadcast_cmd(client, message):
             success += 1
         except Exception:
             failed += 1
-        # Fix: 0.05 → 0.1 সেকেন্ড বিরতি (Telegram rate limit সহ্য করতে)
         await asyncio.sleep(0.1)
 
     g_success = g_failed = 0
@@ -612,31 +629,31 @@ async def broadcast_cmd(client, message):
     )
 
 
-# ─── /cmdlist — সকল কমান্ডের তালিকা ─────────────────────────────────────────
+# ─── /cmdlist — list of all commands ─────────────────────────────────────────
 
 @Client.on_message(filters.command("cmdlist") & filters.user(ADMIN_IDS))
 async def cmdlist(client, message):
-    """Admin: সব কমান্ডের তালিকা দেখাও।"""
+    """Admin: show list of all commands."""
     await message.reply_text(
-        "📋 <b>সকল কমান্ডের তালিকা</b>\n"
+        "📋 <b>All Commands</b>\n"
         "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n"
-        "👤 <b>ইউজার কমান্ড:</b>\n"
-        "/start — বট শুরু করুন\n"
-        "/help — সাহায্য দেখুন\n"
-        "/video — এলোমেলো ভিডিও পান 🎬\n"
-        "/profile — আপনার প্রোফাইল দেখুন\n\n"
-        "🔑 <b>এডমিন কমান্ড:</b>\n"
-        "/stats — সকল পরিসংখ্যান দেখুন\n"
-        "/broadcast — সবাইকে মেসেজ পাঠান (reply করে)\n"
-        "/notifyusers — ভিডিও নোটিফিকেশন পাঠান\n"
-        "/addvideo — ভিডিও যোগ করুন (reply করে)\n"
-        "/delvideo <নম্বর> — নির্দিষ্ট ভিডিও মুছুন\n"
-        "/cmdlist — এই কমান্ড লিস্ট দেখুন\n\n"
-        "⚙️ <b>সেটিংস:</b>\n"
-        f"🎬 PM ভিডিও লিমিট: <b>{VIDEO_DAILY_LIMIT}</b> per 12h\n"
-        f"🏘 গ্রুপ ভিডিও লিমিট: <b>{GROUP_VIDEO_LIMIT}</b> per 12h\n\n"
-        "📩 <b>সাপোর্ট ইনবক্স:</b>\n"
-        "ইউজার বটে সাধারণ মেসেজ লিখলে এই গ্রুপে আসবে।\n"
-        "Reply করলে সরাসরি ইউজারের কাছে যাবে। ✅",
+        "👤 <b>User Commands:</b>\n"
+        "/start — Start the bot\n"
+        "/help — Show help\n"
+        "/video — Get a random video 🎬\n"
+        "/profile — View your profile\n\n"
+        "🔑 <b>Admin Commands:</b>\n"
+        "/stats — View all statistics\n"
+        "/broadcast — Message everyone (as a reply)\n"
+        "/notifyusers — Send video notification\n"
+        "/addvideo — Add a video (as a reply)\n"
+        "/delvideo <number> — Remove a specific video\n"
+        "/cmdlist — Show this command list\n\n"
+        "⚙️ <b>Settings:</b>\n"
+        f"🎬 PM video limit: <b>{VIDEO_DAILY_LIMIT}</b> per 12h\n"
+        f"🏘 Group video limit: <b>{GROUP_VIDEO_LIMIT}</b> per 12h\n\n"
+        "📩 <b>Support Inbox:</b>\n"
+        "When a user sends a plain message to the bot, it lands here.\n"
+        "Reply to it and it goes straight back to the user. ✅",
         parse_mode=enums.ParseMode.HTML,
     )

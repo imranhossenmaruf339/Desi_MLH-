@@ -1,8 +1,8 @@
 """
 Support Inbox Plugin
 ════════════════════
-• User PM-এ কোনো সাধারণ মেসেজ (কমান্ড ছাড়া) পাঠালে → সাপোর্ট গ্রুপে ফরওয়ার্ড হয়।
-• এডমিন সাপোর্ট গ্রুপে reply করলে → বট সেই reply ইউজারের কাছে পাঠায়।
+• When a user sends a plain message in PM (not a command) → it's forwarded to the support group.
+• When an admin replies to it in the support group → the bot sends that reply back to the user.
 """
 
 from pyrogram import Client, filters, enums
@@ -20,32 +20,32 @@ from database import support_msgs
     & ~filters.command(["start", "help", "video", "profile"])
 )
 async def user_to_support(client, message):
-    """ইউজারের মেসেজ সাপোর্ট গ্রুপে ফরওয়ার্ড করো।"""
+    """Forward the user's message to the support group."""
     if not message.from_user:
         return
 
     user = message.from_user
     name = user.first_name or "Unknown"
-    username = f"@{user.username}" if user.username else "নেই"
+    username = f"@{user.username}" if user.username else "none"
 
-    # ── সাপোর্ট গ্রুপে হেডার মেসেজ পাঠাও ──────────────────────────────────
+    # ── Send a header message to the support group ───────────────────────
     try:
         header = await client.send_message(
             chat_id=SUPPORT_GROUP_ID,
             text=(
-                "📩 <b>নতুন সাপোর্ট মেসেজ</b>\n"
+                "📩 <b>New Support Message</b>\n"
                 "┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n"
-                f"👤 নাম: <b>{name}</b>\n"
+                f"👤 Name: <b>{name}</b>\n"
                 f"🔖 Username: {username}\n"
                 f"🆔 ID: <code>{user.id}</code>\n\n"
-                "💬 নিচের মেসেজে <b>Reply</b> করলে ইউজারের কাছে পৌঁছাবে।"
+                "💬 <b>Reply</b> to the message below to reach the user."
             ),
             parse_mode=enums.ParseMode.HTML,
         )
     except Exception:
         return
 
-    # ── আসল মেসেজটি ফরওয়ার্ড করো ──────────────────────────────────────────
+    # ── Forward the actual message ────────────────────────────────────────
     try:
         forwarded = await message.copy(chat_id=SUPPORT_GROUP_ID)
     except Exception:
@@ -54,7 +54,7 @@ async def user_to_support(client, message):
         except Exception:
             return
 
-    # ── ম্যাপিং সেভ করো: forwarded_msg_id → user_id ─────────────────────────
+    # ── Save the mapping: forwarded_msg_id → user_id ───────────────────────
     await support_msgs.insert_one({
         "forwarded_msg_id": forwarded.id,
         "header_msg_id": header.id,
@@ -63,11 +63,11 @@ async def user_to_support(client, message):
         "username": user.username,
     })
 
-    # ── ইউজারকে কনফার্মেশন দাও ──────────────────────────────────────────────
+    # ── Confirm to the user ─────────────────────────────────────────────────
     try:
         await message.reply_text(
-            "✅ <b>আপনার মেসেজ এডমিনের কাছে পাঠানো হয়েছে!</b>\n\n"
-            "শীঘ্রই রিপ্লাই পাবেন। একটু অপেক্ষা করুন 🙏",
+            "✅ <b>Your message has been sent to the admin!</b>\n\n"
+            "You'll get a reply soon. Please wait a moment 🙏",
             parse_mode=enums.ParseMode.HTML,
         )
     except Exception:
@@ -83,29 +83,29 @@ async def user_to_support(client, message):
     & ~filters.command(["broadcast", "stats", "addvideo", "delvideo", "notifyusers", "cmdlist"])
 )
 async def support_reply_to_user(client, message):
-    """এডমিনের reply ইউজারের কাছে পাঠাও।"""
+    """Send the admin's reply back to the user."""
     reply_to = message.reply_to_message
     if not reply_to:
         return
 
-    # ── forwarded_msg_id বা header_msg_id দিয়ে user_id খোঁজো ───────────────
+    # ── Find the user_id via forwarded_msg_id or header_msg_id ────────────
     doc = await support_msgs.find_one({"forwarded_msg_id": reply_to.id})
     if not doc:
         doc = await support_msgs.find_one({"header_msg_id": reply_to.id})
     if not doc:
-        return  # এটা কোনো সাপোর্ট মেসেজ নয়
+        return  # not a support message
 
     user_id = doc["user_id"]
-    user_name = doc.get("user_name", "ইউজার")
+    user_name = doc.get("user_name", "the user")
 
     try:
         await message.copy(chat_id=user_id)
         await message.reply_text(
-            f"✅ <b>{user_name}</b>-এর কাছে পাঠানো হয়েছে।",
+            f"✅ Sent to <b>{user_name}</b>.",
             parse_mode=enums.ParseMode.HTML,
         )
     except Exception as e:
         await message.reply_text(
-            f"❌ পাঠানো যায়নি!\n<code>{e}</code>",
+            f"❌ Could not send!\n<code>{e}</code>",
             parse_mode=enums.ParseMode.HTML,
         )

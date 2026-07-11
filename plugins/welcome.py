@@ -59,8 +59,8 @@ async def on_new_chat_members(client, message):
                     ),
                     parse_mode=enums.ParseMode.HTML,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[LOG-SEND-FAILED] welcome.py bot-added notice: {e!r}")
             continue   # no welcome needed for the bot itself
 
         # ── Skip other bots ───────────────────────────────────────────────────

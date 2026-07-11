@@ -95,7 +95,7 @@ async def confirm_join(client, callback_query):
             )
             return
         except Exception:
-            pass  # verify করা গেলো না — admin-কে পাঠাই
+            pass  # couldn't verify — forward to admin anyway
 
     # ── Guard: pending request less than 24 h old ─────────────────────────────
     from datetime import timedelta
@@ -187,11 +187,11 @@ async def admin_approve(client, callback_query):
 
     user_id = int(callback_query.matches[0].group(1))
 
-    # Fix: video_count নেগেটিভ হওয়া রোধ করতে max(0, ...) ব্যবহার
-    # +15 bonus দিতে current count থেকে 15 কমাও (0-এর নিচে যাবে না)
+    # Fix: use max(0, ...) so video_count can never go negative when granting
+    # the +15 bonus by subtracting from the current count.
     user = await users.find_one({"user_id": user_id})
     old_count = user.get("video_count", 0) if user else 0
-    new_count = max(0, old_count - 15)   # 0-এর নিচে নামবে না
+    new_count = max(0, old_count - 15)   # never drops below 0
 
     current_window = get_current_window_start()
     await users.update_one(

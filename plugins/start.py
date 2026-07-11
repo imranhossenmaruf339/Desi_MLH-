@@ -37,7 +37,7 @@ def _make_welcome_keyboard(bot_username: str):
 
 
 WELCOME_TEXT = """━━━━━━━━━━━━━━━━━━━
-✨🎬  𝗪𝗘𝗟𝗖𝗢𝗠𝗘 🎬✨
+✨🎬  <b>WELCOME</b> 🎬✨
 ━━━━━━━━━━━━━━━━━━━
 👑 Welcome <b>{name}</b> ! 👑
 You are now a member of our Video Community 🎥
@@ -92,7 +92,7 @@ async def start(client, message):
         )
         status_label = "🔁 Returning user"
 
-    # ── Deep-link: /start video — sent from group "ভিডিও দেখুন" button ────────
+    # ── Deep-link: /start video — sent from the group "Watch Video" button ────
     args = message.text.split(None, 1)
     deep_link = args[1].strip() if len(args) > 1 else ""
 
@@ -103,7 +103,7 @@ async def start(client, message):
             wait = is_rate_limited(user_id, cooldown=3.0)
             if wait > 0:
                 await message.reply_text(
-                    f"⏳ একটু ধীরে! <b>{wait:.1f} সেকেন্ড</b> পর আবার চেষ্টা করুন।",
+                    f"⏳ Slow down! Try again in <b>{wait:.1f} seconds</b>.",
                     parse_mode=enums.ParseMode.HTML,
                 )
                 return
@@ -121,8 +121,8 @@ async def start(client, message):
                 ),
                 parse_mode=enums.ParseMode.HTML,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[LOG-SEND-FAILED] start.py deep-link notice: {e!r}")
         await deliver_video(client, user_id, message.chat.id)
         return
 
@@ -139,8 +139,8 @@ async def start(client, message):
             ),
             parse_mode=enums.ParseMode.HTML,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[LOG-SEND-FAILED] start.py start notice: {e!r}")
 
     import bot_info
     name = user.first_name or user.username or "Friend"
