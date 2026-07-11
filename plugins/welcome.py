@@ -12,7 +12,7 @@ from helpers import schedule_delete
 async def on_new_chat_members(client, message):
     """
     - When the bot itself is added to a group → notify the monitor group.
-    - When a real user joins → send welcome message, auto-delete after 30 s.
+    - When a real user joins → send welcome message, auto-delete after 10 s.
     """
     import bot_info
     from plugins.start import WELCOME_TEXT, _make_welcome_keyboard
@@ -67,7 +67,7 @@ async def on_new_chat_members(client, message):
         if member.is_bot:
             continue
 
-        # ── Real user joined → send welcome, delete after 30 s ───────────────
+        # ── Real user joined → send welcome, delete after 10 s ───────────────
         name = member.first_name or member.username or "Friend"
         keyboard = _make_welcome_keyboard(bot_info.BOT_USERNAME) if bot_info.BOT_USERNAME else None
 
@@ -78,6 +78,6 @@ async def on_new_chat_members(client, message):
                 reply_markup=keyboard,
             )
             if sent:
-                asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 60))
+                asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 10))
         except Exception:
             pass
