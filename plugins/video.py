@@ -374,6 +374,21 @@ async def video_cmd(client, message):
             )
             asyncio.create_task(schedule_delete(client, group_id, sent.id, 60))
             asyncio.create_task(schedule_delete(client, group_id, message.id, 5))
+
+            # Fix: group limit-reached events were never logged to the monitor
+            # group — now logged the same way the PM daily-limit is.
+            name  = message.from_user.first_name or "Unknown"
+            uname = f"@{message.from_user.username}" if message.from_user.username else "no username"
+            await _log(
+                client,
+                f"🚫 <b>Group Limit Reached!</b>\n\n"
+                f"👤 Name: <b>{name}</b>\n"
+                f"🔖 Username: {uname}\n"
+                f"🆔 ID: <code>{user_id}</code>\n"
+                f"🏘 Group: <b>{message.chat.title or group_id}</b>\n"
+                f"📊 Used: <b>{count_in_group}/{GROUP_VIDEO_LIMIT}</b> videos\n"
+                f"🕐 Time: {datetime.now(timezone.utc).strftime('%d %b %Y, %I:%M %p UTC')}",
+            )
             return
 
         # Pick an unseen video
@@ -507,7 +522,7 @@ async def video_cmd(client, message):
 
 # ─── "Next video" inline button callback ─────────────────────────────────────
 
-@Client.on_callback_query(filters.regex(r"^next_video$") & filters.private)
+@Client.on_callback_query(filters.regex(r"^next_video$"))
 async def next_video_callback(client, callback_query):
     user_id = callback_query.from_user.id
     chat_id = callback_query.message.chat.id
