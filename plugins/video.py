@@ -194,6 +194,7 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
                 chat_id=chat_id,
                 video=file_id,
                 caption="",
+                has_spoiler=True,
                 supports_streaming=True,
                 duration=video_doc.get("duration", 0),
                 width=video_doc.get("width", 0),
@@ -334,7 +335,7 @@ async def video_cmd(client, message):
             try:
                 sent = await client.send_video(
                     chat_id=group_id, video=file_id, caption="",
-                    supports_streaming=True,
+                    has_spoiler=True, supports_streaming=True,
                     duration=video_doc.get("duration", 0),
                     width=video_doc.get("width", 0), height=video_doc.get("height", 0),
                     parse_mode=enums.ParseMode.HTML, reply_markup=grp_buttons,

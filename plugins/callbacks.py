@@ -102,13 +102,15 @@ async def user_to_support(client, message):
 
 # ─── Support Group Reply → User ───────────────────────────────────────────────
 
-@Client.on_message(
-    filters.chat(SUPPORT_GROUP_ID) if SUPPORT_GROUP_ID else filters.chat([])
+_support_filter = (
+    (filters.chat(SUPPORT_GROUP_ID) if SUPPORT_GROUP_ID else filters.chat([]))
     & filters.reply
     & filters.user(ADMIN_IDS)
     & ~filters.command(["broadcast", "stats", "addvideo", "delvideo", "notifyusers",
                         "cmdlist", "ban", "unban", "banlist"])
 )
+
+@Client.on_message(_support_filter)
 async def support_reply_to_user(client, message):
     """Send the admin's reply back to the user."""
     reply_to = message.reply_to_message
