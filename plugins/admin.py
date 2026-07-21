@@ -5,7 +5,7 @@ from pyrogram import Client, filters, enums
 
 from config import ADMIN_IDS, VIDEO_CHANNEL_ID, LOG_GROUP_ID, VIDEO_DAILY_LIMIT, GROUP_VIDEO_LIMIT, OWNER_ID
 from database import users, videos, groups, banned_users
-from helpers import get_current_window_start, get_caption_with_media_group_fallback
+from helpers import get_current_window_start
 
 
 def _log_error(context: str, exc: Exception):
@@ -24,8 +24,6 @@ async def admin_save_video(client, message):
     file_id = None
     file_type = "video"
     duration = width = height = 0
-    caption = await get_caption_with_media_group_fallback(client, message)
-
     if message.video:
         v = message.video
         file_id = v.file_id
@@ -60,7 +58,6 @@ async def admin_save_video(client, message):
     await videos.insert_one({
         "file_id": file_id,
         "file_type": file_type,
-        "caption": caption,
         "duration": duration,
         "width": width,
         "height": height,
@@ -79,8 +76,7 @@ async def admin_save_video(client, message):
             text=(
                 "🎬 <b>New Video Added (Manual)</b>\n\n"
                 f"📦 Total videos in DB: <b>{total}</b>\n"
-                f"🎭 Type: {spoiler_note}\n"
-                f"📝 Caption: {caption or '—'}"
+                f"🎭 Type: {spoiler_note}"
             ),
             parse_mode=enums.ParseMode.HTML,
         )
@@ -294,8 +290,6 @@ async def addvideo(client, message):
     file_id = None
     file_type = "video"
     duration = width = height = 0
-    caption = await get_caption_with_media_group_fallback(client, reply)
-
     if reply.video:
         v = reply.video
         file_id = v.file_id
@@ -325,7 +319,6 @@ async def addvideo(client, message):
     await videos.insert_one({
         "file_id": file_id,
         "file_type": file_type,
-        "caption": caption,
         "duration": duration,
         "width": width,
         "height": height,

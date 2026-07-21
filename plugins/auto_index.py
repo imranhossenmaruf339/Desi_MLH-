@@ -10,7 +10,6 @@ from pyrogram import Client, filters, enums
 
 from config import VIDEO_CHANNEL_ID, LOG_GROUP_ID, ADMIN_IDS
 from database import videos
-from helpers import get_caption_with_media_group_fallback
 
 # Track recently processed media_group_ids to avoid saving album duplicates
 _seen_media_groups: set[str] = set()
@@ -35,8 +34,6 @@ async def auto_index_channel_video(client, message):
     file_id = None
     file_type = "video"
     duration = width = height = 0
-    caption = await get_caption_with_media_group_fallback(client, message)
-
     if message.video:
         v = message.video
         file_id = v.file_id
@@ -75,7 +72,6 @@ async def auto_index_channel_video(client, message):
     await videos.insert_one({
         "file_id": file_id,
         "file_type": file_type,
-        "caption": caption,
         "duration": duration,
         "width": width,
         "height": height,
@@ -93,8 +89,7 @@ async def auto_index_channel_video(client, message):
                 text=(
                     "🔄 <b>Auto-Index: নতুন ভিডিও সংরক্ষিত</b>\n\n"
                     f"📦 মোট ভিডিও: <b>{total}</b>\n"
-                    f"🎭 Type: {spoiler_note}\n"
-                    f"📝 Caption: {caption or '—'}"
+                    f"🎭 Type: {spoiler_note}"
                 ),
                 parse_mode=enums.ParseMode.HTML,
             )
