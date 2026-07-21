@@ -1,78 +1,38 @@
 """
-Auto-approve join requests for the required group.
-When a user sends a join request to REQUIRED_GROUP_ID, the bot
-automatically approves it so they can start receiving videos.
+Monitor join requests for the required group.
+Bot does NOT auto-approve — it only logs the request to the monitor group.
+Admin must manually approve/decline from the group.
 """
 
 from pyrogram import Client, filters, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import REQUIRED_GROUP_ID, REQUIRED_GROUP_LINK, LOG_GROUP_ID, ADMIN_IDS
-from database import users
-from helpers import get_current_window_start
-from datetime import datetime, timezone
+from config import REQUIRED_GROUP_ID, LOG_GROUP_ID
 
 
 @Client.on_chat_join_request(
     filters.chat(REQUIRED_GROUP_ID) if REQUIRED_GROUP_ID else filters.chat([])
 )
-async def auto_approve_join_request(client, join_request):
-    """Auto-approve every join request to the required group."""
-    user = join_request.from_user
-    user_id = user.id
-
-    try:
-        await join_request.approve()
-    except Exception as e:
-        print(f"[JOIN-APPROVE-FAILED] Could not approve {user_id}: {e!r}")
+async def observe_join_request(client, join_request):
+    """Log every join request to the monitor group — do NOT approve."""
+    if not LOG_GROUP_ID:
         return
 
-    # Make sure the user exists in the DB
-    existing = await users.find_one({"user_id": user_id})
-    if not existing:
-        window = get_current_window_start()
-        await users.insert_one({
-            "user_id": user_id,
-            "username": user.username,
-            "first_name": user.first_name or "",
-            "points": 0,
-            "referrals": 0,
-            "video_count": 0,
-            "video_window_start": window,
-            "joined_at": datetime.now(timezone.utc),
-        })
+    user = join_request.from_user
+    user_id = user.id
+    username = f"@{user.username}" if user.username else "N/A"
+    name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "Unknown"
 
-    # Welcome message to the user in PM
     try:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎬 Get Video", callback_data="next_video")],
-        ])
         await client.send_message(
-            chat_id=user_id,
+            chat_id=LOG_GROUP_ID,
             text=(
-                "✅ <b>আপনার Join Request Approve হয়েছে!</b>\n\n"
-                "🎉 এখন আপনি ভিডিও দেখতে পারবেন।\n"
-                "👇 নিচের বাটনে ক্লিক করুন অথবা /video লিখুন।"
+                "🔔 <b>নতুন Join Request</b>\n\n"
+                f"👤 Name: {name}\n"
+                f"🔖 Username: {username}\n"
+                f"🆔 ID: <code>{user_id}</code>\n\n"
+                "⚠️ Bot approve করবে না — Admin manually করবে।"
             ),
             parse_mode=enums.ParseMode.HTML,
-            reply_markup=keyboard,
         )
-    except Exception:
-        pass  # user may not have started the bot yet — that's fine
-
-    # Log to monitor group
-    if LOG_GROUP_ID:
-        try:
-            username = f"@{user.username}" if user.username else "N/A"
-            await client.send_message(
-                chat_id=LOG_GROUP_ID,
-                text=(
-                    "✅ <b>Join Request Approved</b>\n\n"
-                    f"👤 Name: {user.first_name or ''} {user.last_name or ''}\n"
-                    f"🔖 Username: {username}\n"
-                    f"🆔 ID: <code>{user_id}</code>"
-                ),
-                parse_mode=enums.ParseMode.HTML,
-            )
-        except Exception as e:
-            print(f"[LOG-SEND-FAILED] join_approve.py: {e!r}")
+    except Exception as e:
+        print(f"[LOG-SEND-FAILED] join_approve.py (chat_id={LOG_GROUP_ID}): {e!r}")

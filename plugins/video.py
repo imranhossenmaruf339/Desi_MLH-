@@ -12,6 +12,9 @@ from helpers import get_current_window_start, schedule_delete, is_rate_limited
 
 
 async def _log(client, text: str):
+    if not LOG_GROUP_ID:
+        print(f"[LOG-SKIPPED] LOG_CHANNEL_ID not set. Message: {text[:80]}")
+        return
     try:
         await client.send_message(
             chat_id=LOG_GROUP_ID,
@@ -19,14 +22,14 @@ async def _log(client, text: str):
             parse_mode=enums.ParseMode.HTML,
         )
     except Exception as e:
-        print(f"[LOG-SEND-FAILED] video.py _log: {e!r}")
+        print(f"[LOG-SEND-FAILED] video.py _log (chat_id={LOG_GROUP_ID}): {e!r}")
 
 
 def _join_buttons():
     buttons = []
     if REQUIRED_GROUP_LINK:
-        buttons.append([InlineKeyboardButton("🔥 আমাদের Group-এ Join করুন", url=REQUIRED_GROUP_LINK)])
-    buttons.append([InlineKeyboardButton("▶️ Next Video", callback_data="next_video")])
+        buttons.append([InlineKeyboardButton("🔴 আমাদের Group-এ Join করুন", url=REQUIRED_GROUP_LINK)])
+    buttons.append([InlineKeyboardButton("🔴 Next Video", callback_data="next_video")])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -84,15 +87,15 @@ async def deliver_video(client, user_id: int, chat_id: int, reply_to=None):
         is_member = await _check_group_membership(client, user_id)
         if not is_member:
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("👥 Group-এ Join করুন", url=REQUIRED_GROUP_LINK or "https://t.me")],
-                [InlineKeyboardButton("✅ Join করেছি", callback_data="check_join")],
+                [InlineKeyboardButton("🔴 Group-এ Join করুন", url=REQUIRED_GROUP_LINK or "https://t.me")],
+                [InlineKeyboardButton("🔴 Join করেছি — Check করুন", callback_data="check_join")],
             ])
             await client.send_message(
                 chat_id=chat_id,
                 text=(
                     "❌ <b>প্রথমে আমাদের Group-এ Join করুন!</b>\n\n"
-                    "Group-এ Join Request দিন — Bot স্বয়ংক্রিয় Approve করবে।\n"
-                    "তারপর ✅ বাটনে ক্লিক করুন।"
+                    "Group-এ Join Request পাঠান এবং Admin Approve করলে\n"
+                    "নিচের বাটনে ক্লিক করুন।"
                 ),
                 parse_mode=enums.ParseMode.HTML,
                 reply_markup=keyboard,
@@ -287,9 +290,9 @@ async def video_cmd(client, message):
             return
 
         grp_buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👥 Join করুন", url=REQUIRED_GROUP_LINK or "https://t.me")],
+            [InlineKeyboardButton("🔴 Join করুন", url=REQUIRED_GROUP_LINK or "https://t.me")],
             [InlineKeyboardButton(
-                "🤖 আরো দেখুন",
+                "🔴 আরো দেখুন",
                 url=f"https://t.me/{bot_username}?start=video",
             )],
         ])
