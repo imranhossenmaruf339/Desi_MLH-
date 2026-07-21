@@ -1,307 +1,137 @@
-from datetime import datetime, timezone
+"""
+Callback query handlers (non-video related).
+Old VIP/channel verification logic removed — replaced by group-based force-join in video.py.
+"""
+
+from datetime import datetime, timezone, timedelta
 
 from pyrogram import Client, filters, enums
-from pyrogram.errors import UserNotParticipant
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import ADMIN_IDS, JOIN_CHANNEL_LINK, VIP_CHANNEL_LINK, VIDEO_DAILY_LIMIT, JOIN_CHANNEL_2_USERNAME, LOG_GROUP_ID
-from database import users, video_requests, user_video_history
+from config import ADMIN_IDS, LOG_GROUP_ID, SUPPORT_GROUP_ID
+from database import users, support_msgs
 from helpers import get_current_window_start
 
 
-# ─── Auto-verify: legacy handler (the_couple_vibe channel) ───────────────────
-
-@Client.on_callback_query(filters.regex(r"^auto_confirm:(\d+)$"))
-async def auto_confirm(client, callback_query):
-    requester_id = callback_query.from_user.id
-    target_id = int(callback_query.matches[0].group(1))
-
-    if requester_id != target_id:
-        await callback_query.answer("❌ This button is not for you.", show_alert=True)
-        return
-
-    is_member = False
-    try:
-        member = await client.get_chat_member(JOIN_CHANNEL_2_USERNAME, requester_id)
-        is_member = member.status not in [
-            enums.ChatMemberStatus.BANNED,
-            enums.ChatMemberStatus.LEFT,
-        ]
-    except UserNotParticipant:
-        is_member = False
-    except Exception:
-        is_member = False
-
-    if not is_member:
-        await callback_query.answer(
-            "❌ You haven't joined the channel yet! Please join first, then try again.",
-            show_alert=True,
-        )
-        return
-
-    current_window = get_current_window_start()
-    await users.update_one(
-        {"user_id": requester_id},
-        {"$set": {"video_count": 0, "video_window_start": current_window}},
-        upsert=True,
-    )
-
-    await callback_query.answer("✅ Verified! Your video limit has been reset.", show_alert=True)
-    try:
-        await callback_query.message.edit_text(
-            "✅ <b>Verified!</b>\n\n"
-            "Your video limit has been reset. Use /video to continue. Enjoy! 🎬",
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=None,
-        )
-    except Exception:
-        pass
-
-
-# ─── Confirmed button: check VIP channel → send request to monitor group ─────
-
-@Client.on_callback_query(filters.regex(r"^confirm_join:(\d+)$"))
-async def confirm_join(client, callback_query):
-    requester_id = callback_query.from_user.id
-    target_id = int(callback_query.matches[0].group(1))
-
-    if requester_id != target_id:
-        await callback_query.answer("❌ This button is not for you.", show_alert=True)
-        return
-
-    # ── Check VIP channel membership (only when channel ID is configured) ────
-    import bot_info
-    vip_id = bot_info.VIP_CHANNEL_ID
-
-    if vip_id:
-        try:
-            member = await client.get_chat_member(vip_id, requester_id)
-            is_member = member.status not in [
-                enums.ChatMemberStatus.BANNED,
-                enums.ChatMemberStatus.LEFT,
-            ]
-            if not is_member:
-                await callback_query.answer(
-                    "❌ You haven't joined the VIP Channel yet!\n"
-                    "Please join first, then tap Confirmed again.",
-                    show_alert=True,
-                )
-                return
-        except UserNotParticipant:
-            await callback_query.answer(
-                "❌ You haven't joined the VIP Channel yet!\n"
-                "Please join first, then tap Confirmed again.",
-                show_alert=True,
-            )
-            return
-        except Exception:
-            pass  # couldn't verify — forward to admin anyway
-
-    # ── Guard: pending request less than 24 h old ─────────────────────────────
-    from datetime import timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    existing = await video_requests.find_one({
-        "user_id": requester_id,
-        "status": "pending",
-        "requested_at": {"$gte": cutoff},
-    })
-    if existing:
-        await callback_query.answer(
-            "⏳ Your request is already pending admin review. Please wait.",
-            show_alert=True,
-        )
-        return
-
-    # Clear any old/stale pending entries before inserting a fresh one
-    await video_requests.delete_many({
-        "user_id": requester_id,
-        "status": "pending",
-        "requested_at": {"$lt": cutoff},
-    })
-
-    await video_requests.insert_one({
-        "user_id": requester_id,
-        "username": callback_query.from_user.username or "N/A",
-        "first_name": callback_query.from_user.first_name or "",
-        "status": "pending",
-        "requested_at": datetime.now(timezone.utc),
-    })
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Approve (+15 videos)", callback_data=f"admin_approve:{requester_id}"),
-            InlineKeyboardButton("❌ Decline", callback_data=f"admin_decline:{requester_id}"),
-        ]
-    ])
-
-    username_display = (
-        f"@{callback_query.from_user.username}"
-        if callback_query.from_user.username
-        else "N/A"
-    )
-
-    try:
-        await client.send_message(
-            chat_id=LOG_GROUP_ID,
-            text=(
-                "📋 <b>VIP Channel Verification Request</b>\n\n"
-                f"👤 Name: {callback_query.from_user.first_name}\n"
-                f"🔖 Username: {username_display}\n"
-                f"🔢 User ID: <code>{requester_id}</code>\n\n"
-                "✅ Claims to have joined <b>VIP Channel</b>.\n"
-                f"🔗 {VIP_CHANNEL_LINK}\n\n"
-                "Approve to grant <b>+15 extra videos</b>."
-            ),
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=keyboard,
-        )
-    except Exception as e:
-        # Roll back the pending insert so user can try again
-        await video_requests.delete_one({"user_id": requester_id, "status": "pending"})
-        await callback_query.answer(
-            f"❌ Could not reach monitor group. Please try again later.\nError: {e}",
-            show_alert=True,
-        )
-        return
-
-    await callback_query.answer("✅ Request sent! Please wait for admin approval.", show_alert=True)
-    try:
-        await callback_query.message.edit_text(
-            "⏳ <b>Request submitted!</b>\n\n"
-            "Your VIP channel join has been sent to the admin.\n"
-            "You'll receive a message once it's reviewed. 🔔",
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=None,
-        )
-    except Exception:
-        pass
-
-
-# ─── Admin: approve → grant +15 videos ───────────────────────────────────────
-
-@Client.on_callback_query(filters.regex(r"^admin_approve:(\d+)$"))
-async def admin_approve(client, callback_query):
-    if callback_query.from_user.id not in ADMIN_IDS:
-        await callback_query.answer("❌ Unauthorized.", show_alert=True)
-        return
-
-    user_id = int(callback_query.matches[0].group(1))
-
-    # Fix: use max(0, ...) so video_count can never go negative when granting
-    # the +15 bonus by subtracting from the current count.
-    user = await users.find_one({"user_id": user_id})
-    old_count = user.get("video_count", 0) if user else 0
-    new_count = max(0, old_count - 15)   # never drops below 0
-
-    current_window = get_current_window_start()
-    await users.update_one(
-        {"user_id": user_id},
-        {
-            "$set": {"video_count": new_count, "video_window_start": current_window},
-            "$setOnInsert": {
-                "points": 0, "referrals": 0,
-                "joined_at": datetime.now(timezone.utc),
-            },
-        },
-        upsert=True,
-    )
-    await video_requests.update_one(
-        {"user_id": user_id, "status": "pending"},
-        {"$set": {"status": "approved", "reviewed_at": datetime.now(timezone.utc)}},
-    )
-
-    try:
-        await client.send_message(
-            chat_id=user_id,
-            text=(
-                "✅ <b>Approved!</b>\n\n"
-                "You've been granted <b>+15 extra videos</b>! 🎬\n"
-                "Use /video to continue watching. Enjoy! 🔥"
-            ),
-            parse_mode=enums.ParseMode.HTML,
-        )
-    except Exception:
-        pass
-
-    original_text = callback_query.message.text or ""
-    try:
-        await callback_query.message.edit_text(
-            original_text + "\n\n✅ <b>Approved</b> — +15 videos granted.",
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=None,
-        )
-    except Exception:
-        pass
-    await callback_query.answer("✅ User approved — +15 videos granted.")
-
-
-# ─── Admin: decline ───────────────────────────────────────────────────────────
-
-@Client.on_callback_query(filters.regex(r"^admin_decline:(\d+)$"))
-async def admin_decline(client, callback_query):
-    if callback_query.from_user.id not in ADMIN_IDS:
-        await callback_query.answer("❌ Unauthorized.", show_alert=True)
-        return
-
-    user_id = int(callback_query.matches[0].group(1))
-
-    await video_requests.update_one(
-        {"user_id": user_id, "status": "pending"},
-        {"$set": {"status": "declined", "reviewed_at": datetime.now(timezone.utc)}},
-    )
-
-    try:
-        await client.send_message(
-            chat_id=user_id,
-            text=(
-                "❌ <b>Request Declined</b>\n\n"
-                "It seems you haven't joined the VIP Channel yet.\n"
-                "Please join first, then use /video and tap <b>Confirmed</b> again.\n\n"
-                f"🔗 {VIP_CHANNEL_LINK}"
-            ),
-            parse_mode=enums.ParseMode.HTML,
-        )
-    except Exception:
-        pass
-
-    original_text = callback_query.message.text or ""
-    try:
-        await callback_query.message.edit_text(
-            original_text + "\n\n❌ <b>Declined</b> by admin.",
-            parse_mode=enums.ParseMode.HTML,
-            reply_markup=None,
-        )
-    except Exception:
-        pass
-    await callback_query.answer("❌ User declined and notified.")
-
-
-# ─── My Status ────────────────────────────────────────────────────────────────
+# ─── my_status callback (from start keyboard) ────────────────────────────────
 
 @Client.on_callback_query(filters.regex(r"^my_status$"))
-async def my_status(client, callback_query):
+async def my_status_callback(client, callback_query):
     user_id = callback_query.from_user.id
-    user = await users.find_one({"user_id": user_id})
 
+    user = await users.find_one({"user_id": user_id})
     if not user:
-        await callback_query.answer("No profile found. Send /start first.", show_alert=True)
+        await callback_query.answer("Profile পাওয়া যায়নি।", show_alert=True)
         return
 
-    total_watched = await user_video_history.count_documents({"user_id": user_id})
+    from config import VIDEO_DAILY_LIMIT
+    current_window = get_current_window_start()
+    user_window = user.get("video_window_start")
+    video_count = user.get("video_count", 0) if user_window == current_window else 0
+    remaining = max(0, VIDEO_DAILY_LIMIT - video_count)
 
-    joined_at = user.get("joined_at")
-    joined_str = joined_at.strftime("%d %b %Y") if joined_at else "N/A"
-
-    name = user.get("first_name") or callback_query.from_user.first_name or "N/A"
-    username = f"@{user.get('username')}" if user.get("username") else "N/A"
-
-    await callback_query.answer()
-    await callback_query.message.reply_text(
-        "📊 <b>My Status</b>\n\n"
-        f"👤 Name: <b>{name}</b>\n"
-        f"🔖 Username: {username}\n"
-        f"🆔 ID: <code>{user_id}</code>\n"
-        f"📅 Joined: <b>{joined_str}</b>\n"
-        f"🎬 Total Videos Watched: <b>{total_watched}</b>",
-        parse_mode=enums.ParseMode.HTML,
+    await callback_query.answer(
+        f"🎬 এই window-এ দেখেছেন: {video_count}/{VIDEO_DAILY_LIMIT}\n"
+        f"✅ আরো পাবেন: {remaining}টি",
+        show_alert=True,
     )
+
+
+# ─── Support: user sends message to bot PM → forwarded to support group ───────
+
+@Client.on_message(
+    filters.private
+    & ~filters.command(["start", "help", "video", "profile", "ban", "unban", "banlist",
+                        "stats", "broadcast", "notifyusers", "addvideo", "delvideo", "cmdlist"])
+    & ~filters.user(ADMIN_IDS)
+    & (filters.text | filters.photo | filters.document | filters.audio | filters.voice | filters.sticker)
+)
+async def user_to_support(client, message):
+    """Forward any plain user message to the support group."""
+    if not SUPPORT_GROUP_ID:
+        return
+
+    user = message.from_user
+    if not user:
+        return
+
+    name = user.first_name or user.username or "Unknown"
+    username = f"@{user.username}" if user.username else "N/A"
+
+    # Send header
+    try:
+        header = await client.send_message(
+            chat_id=SUPPORT_GROUP_ID,
+            text=(
+                f"📩 <b>Support Message</b>\n\n"
+                f"👤 Name: {name}\n"
+                f"🔖 Username: {username}\n"
+                f"🆔 ID: <code>{user.id}</code>"
+            ),
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception:
+        return
+
+    # Forward the actual message
+    try:
+        forwarded = await message.forward(chat_id=SUPPORT_GROUP_ID)
+        fwd_id = forwarded.id
+    except Exception:
+        fwd_id = None
+
+    # Store mapping so admin replies go back to the user
+    await support_msgs.insert_one({
+        "user_id": user.id,
+        "user_name": name,
+        "username": user.username,
+        "header_msg_id": header.id,
+        "forwarded_msg_id": fwd_id,
+        "sent_at": datetime.now(timezone.utc),
+    })
+
+    try:
+        await message.reply_text(
+            "✅ <b>আপনার message admin-এর কাছে পাঠানো হয়েছে।</b>\n\n"
+            "একটু অপেক্ষা করুন, শীঘ্রই reply পাবেন 🙏",
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception:
+        pass
+
+
+# ─── Support Group Reply → User ───────────────────────────────────────────────
+
+@Client.on_message(
+    filters.chat(SUPPORT_GROUP_ID) if SUPPORT_GROUP_ID else filters.chat([])
+    & filters.reply
+    & filters.user(ADMIN_IDS)
+    & ~filters.command(["broadcast", "stats", "addvideo", "delvideo", "notifyusers",
+                        "cmdlist", "ban", "unban", "banlist"])
+)
+async def support_reply_to_user(client, message):
+    """Send the admin's reply back to the user."""
+    reply_to = message.reply_to_message
+    if not reply_to:
+        return
+
+    doc = await support_msgs.find_one({"forwarded_msg_id": reply_to.id})
+    if not doc:
+        doc = await support_msgs.find_one({"header_msg_id": reply_to.id})
+    if not doc:
+        return
+
+    user_id = doc["user_id"]
+    user_name = doc.get("user_name", "the user")
+
+    try:
+        await message.copy(chat_id=user_id)
+        await message.reply_text(
+            f"✅ <b>{user_name}</b>-কে পাঠানো হয়েছে।",
+            parse_mode=enums.ParseMode.HTML,
+        )
+    except Exception as e:
+        await message.reply_text(
+            f"❌ পাঠানো সম্ভব হয়নি!\n<code>{e}</code>",
+            parse_mode=enums.ParseMode.HTML,
+        )

@@ -15,26 +15,24 @@ OWNER_ID = ADMIN_IDS[0] if ADMIN_IDS else 0
 
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL")
 
-VIDEO_CHANNEL_ID = int(os.getenv("VIDEO_CHANNEL_ID", "-1002623940581"))
+VIDEO_CHANNEL_ID = int(os.getenv("VIDEO_CHANNEL_ID", "0"))
 LOG_GROUP_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 
-JOIN_CHANNEL_LINK = os.getenv("VIP_CHANNEL1_LINK", "https://t.me/+YTZcUp9h0qYwNjc1")
-
-# Note: set this as VIP_CHANNEL_LINK in .env (previously named VIP_CHANNEL2_LINK — wrong name)
-VIP_CHANNEL_LINK = os.getenv("VIP_CHANNEL_LINK", "https://t.me/+ob96Z-mZmjBjNGQ1")
-
-# VIP_CHANNEL_ID is needed for membership check
-_vip_raw = os.getenv("VIP_CHANNEL_ID", "")
+# ── Required Group (Force Join) ───────────────────────────────────────────────
+# Set REQUIRED_GROUP_ID to the numeric ID of the group users must join
+# Set REQUIRED_GROUP_LINK to the invite link (e.g. https://t.me/+xxxxxx)
+_required_group_raw = os.getenv("REQUIRED_GROUP_ID", "")
 try:
-    VIP_CHANNEL_ID = int(_vip_raw) if _vip_raw else None
+    REQUIRED_GROUP_ID = int(_required_group_raw) if _required_group_raw else None
 except (ValueError, TypeError):
-    VIP_CHANNEL_ID = None
+    REQUIRED_GROUP_ID = None
 
-JOIN_CHANNEL_2_LINK     = os.getenv("JOIN_CHANNEL_2_LINK", "https://t.me/the_couple_vibe")
-JOIN_CHANNEL_2_USERNAME = os.getenv("JOIN_CHANNEL_2_USERNAME", "the_couple_vibe")
+REQUIRED_GROUP_LINK = os.getenv("REQUIRED_GROUP_LINK", "")
+
+SUPPORT_GROUP_ID = int(os.getenv("SUPPORT_GROUP_ID", "0"))
+
 VIDEO_DAILY_LIMIT = int(os.getenv("VIDEO_DAILY_LIMIT", "10"))
-GROUP_VIDEO_LIMIT = int(os.getenv("GROUP_VIDEO_LIMIT", "5"))   # max videos per user per group per 12h window
-SUPPORT_GROUP_ID  = int(os.getenv("SUPPORT_GROUP_ID", "-1003876863435"))  # support inbox group
+GROUP_VIDEO_LIMIT = int(os.getenv("GROUP_VIDEO_LIMIT", "5"))
 
 # ── Required variable validation ─────────────────────────────────────────────
 _missing = []
@@ -52,13 +50,20 @@ if _missing:
     print("[ERROR] Set these variables in your .env file or deployment platform.")
     sys.exit(1)
 
-# ── Diagnostics: warn loudly (in Railway logs) if monitor/support IDs look wrong ──
+if not REQUIRED_GROUP_ID:
+    print(
+        "[WARNING] REQUIRED_GROUP_ID is not set. "
+        "Force-join check is disabled — all users can get videos without joining."
+    )
+if not REQUIRED_GROUP_LINK:
+    print(
+        "[WARNING] REQUIRED_GROUP_LINK is not set. "
+        "The join button will have no URL until this is configured."
+    )
 if LOG_GROUP_ID == 0:
     print(
         "[WARNING] LOG_CHANNEL_ID is not set (defaulting to 0). "
-        "The bot CANNOT send monitor-group notifications (new video added, "
-        "who watched, limit reached, etc.) until this is set correctly in your "
-        "deployment platform's environment variables."
+        "The bot CANNOT send monitor-group notifications until this is set."
     )
 if SUPPORT_GROUP_ID == 0:
     print(

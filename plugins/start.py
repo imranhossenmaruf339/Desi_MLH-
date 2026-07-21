@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pyrogram import Client, filters, enums
 
-from config import LOG_GROUP_ID, VIP_CHANNEL_LINK
+from config import LOG_GROUP_ID, REQUIRED_GROUP_LINK
 from database import users
 from helpers import get_current_window_start, schedule_delete, is_rate_limited
 from plugins.video import deliver_video
@@ -17,49 +17,47 @@ def _make_welcome_keyboard(bot_username: str):
     share_text = quote(f"Watch exclusive videos! Try @{bot_username}", safe="")
     share_url = f"https://t.me/share/url?url={quote(bot_url, safe='')}&text={share_text}"
 
-    return InlineKeyboardMarkup([
-        # Row 1 — add bot to a group
+    rows = [
         [InlineKeyboardButton(
             "➕ Add Me To a Group",
             url=f"https://t.me/{bot_username}?startgroup=true",
         )],
-        # Row 2 — VIP channel + buy premium
-        [
-            InlineKeyboardButton("💎 VIP Channel", url=VIP_CHANNEL_LINK),
-            InlineKeyboardButton("💳 Buy Premium", url="https://t.me/GhostinWhispers1"),
-        ],
-        # Row 3 — my status + share bot
-        [
-            InlineKeyboardButton("📊 My Status", callback_data="my_status"),
-            InlineKeyboardButton("📢 Share Bot", url=share_url),
-        ],
+    ]
+
+    if REQUIRED_GROUP_LINK:
+        rows.append([InlineKeyboardButton("👥 আমাদের Group-এ Join করুন", url=REQUIRED_GROUP_LINK)])
+
+    rows.append([
+        InlineKeyboardButton("📊 My Status", callback_data="my_status"),
+        InlineKeyboardButton("📢 Share Bot", url=share_url),
     ])
+
+    return InlineKeyboardMarkup(rows)
 
 
 WELCOME_TEXT = """━━━━━━━━━━━━━━━━━━━
 ✨🎬  <b>WELCOME</b> 🎬✨
 ━━━━━━━━━━━━━━━━━━━
-👑 Welcome <b>{name}</b> ! 👑
-You are now a member of our Video Community 🎥
+👑 স্বাগতম <b>{name}</b> ! 👑
+আমাদের Video Community-তে আপনাকে স্বাগত জানাই 🎥
 
-🔥 To watch videos use:
+🔥 ভিডিও দেখতে ব্যবহার করুন:
 👉 /video
 ━━━━━━━━━━━━━━━━━━━
-📜 RULES
+📜 নিয়মাবলী
 ━━━━━━━━━━━━━━━━━━━
-✅ Be respectful
-✅ No spam
-✅ No illegal content
-✅ Follow admin rules
-⚠️ Rule violation = Instant remove
+✅ সবার সাথে সম্মানজনক আচরণ করুন
+✅ Spam করবেন না
+✅ অবৈধ কন্টেন্ট শেয়ার করবেন না
+✅ Admin-এর নির্দেশ মেনে চলুন
+⚠️ নিয়ম ভাঙলে = তাৎক্ষণিক Remove
 ━━━━━━━━━━━━━━━━━━━"""
 
 
-# /start in private chat OR in a group
 @Client.on_message(filters.command("start") & (filters.private | filters.group))
 async def start(client, message):
     if not message.from_user:
-        return   # anonymous admin in group — ignore
+        return
 
     user_id = message.from_user.id
     user = message.from_user
@@ -82,7 +80,6 @@ async def start(client, message):
         })
         status_label = "🆕 New user"
     else:
-        # Always keep name/username fresh so monitor-group logs are accurate
         await users.update_one(
             {"user_id": user_id},
             {"$set": {
@@ -92,23 +89,21 @@ async def start(client, message):
         )
         status_label = "🔁 Returning user"
 
-    # ── Deep-link: /start video — sent from the group "Watch Video" button ────
+    # Deep-link: /start video
     args = message.text.split(None, 1)
     deep_link = args[1].strip() if len(args) > 1 else ""
 
     if deep_link == "video" and not in_group:
-        # ── Rate limit check ─────────────────────────────────────────────────
         from config import ADMIN_IDS
         if user_id not in ADMIN_IDS:
             wait = is_rate_limited(user_id, cooldown=3.0)
             if wait > 0:
                 await message.reply_text(
-                    f"⏳ Slow down! Try again in <b>{wait:.1f} seconds</b>.",
+                    f"⏳ একটু ধীরে! <b>{wait:.1f} seconds</b> পরে আবার চেষ্টা করুন।",
                     parse_mode=enums.ParseMode.HTML,
                 )
                 return
 
-        # Register / log the user first (already done above), then deliver video
         try:
             await client.send_message(
                 chat_id=LOG_GROUP_ID,
@@ -126,7 +121,6 @@ async def start(client, message):
         await deliver_video(client, user_id, message.chat.id)
         return
 
-    # Notify the log group every time someone starts the bot
     try:
         await client.send_message(
             chat_id=LOG_GROUP_ID,
@@ -152,6 +146,5 @@ async def start(client, message):
         reply_markup=keyboard,
     )
 
-    # Auto-delete /start reply in groups after 30 seconds
     if in_group and sent:
         asyncio.create_task(schedule_delete(client, message.chat.id, sent.id, 30))
